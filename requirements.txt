@@ -1,3 +1,8 @@
 mitmproxy>=10.0.0
 requests>=2.31.0
 python-dotenv>=1.0.0
+
+# macOS-only: lets the GUI override the menu-bar bundle name so it
+# shows "TradeSynchronizer" instead of the embedded Python framework's
+# default "Python".
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
