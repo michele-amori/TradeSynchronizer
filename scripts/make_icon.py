@@ -43,9 +43,14 @@ OUTPUT_ICNS  = PROJECT_ROOT / "AppIcon.icns"
 BG_TOP        = (37, 99, 235)      # bright blue (Tailwind blue-600)
 BG_BOTTOM     = (24, 60, 150)      # deeper blue
 ARROW_COLOR   = (255, 255, 255, 255)
-CORNER_RATIO  = 0.22               # rounded-square corner, % of side
-RING_RADIUS   = 0.30               # arc radius, % of side
-RING_THICK    = 0.10               # arc thickness, % of side
+CORNER_RATIO  = 0.22               # rounded-square corner, % of CONTENT side
+RING_RADIUS   = 0.30               # arc radius, % of CONTENT side
+RING_THICK    = 0.10               # arc thickness, % of CONTENT side
+
+# macOS Icon Grid: the visible content (rounded square + arrows) must
+# occupy ~80% of the canvas, leaving roughly 10% padding on each side,
+# or the icon will appear visibly larger than every other Dock icon.
+INSET_RATIO   = 0.10
 
 # Each arrow covers 140° with a 20° gap on each side, drawn clockwise.
 TOP_ARC    = (200, 340)            # passes through 270° (visual top)
@@ -113,24 +118,23 @@ def _draw_arrow_head(
     draw.polygon([tip, outer, inner], fill=ARROW_COLOR)
 
 
-def render(size: int) -> Image.Image:
-    """Render the icon at the given square size."""
-    # Background: gradient inside a rounded-square mask.
+def _render_content(size: int) -> Image.Image:
+    """Draw the icon's actual content (rounded square + arrows) into
+    a `size`×`size` image, with the rounded square filling that
+    entire space — no outer padding. The outer padding is added by
+    render()."""
     grad = _make_gradient(size)
     mask = _rounded_mask(size, radius=int(size * CORNER_RATIO))
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     img.paste(grad, (0, 0), mask)
 
-    # Sync arrows.
     draw = ImageDraw.Draw(img)
     cx = cy = size / 2
     R = size * RING_RADIUS
     thick = size * RING_THICK
     bbox = (cx - R, cy - R, cx + R, cy + R)
 
-    # Two arcs (drawn clockwise by ImageDraw.arc convention) + arrowheads
-    # at each end.
-    draw.arc(bbox, start=TOP_ARC[0],    end=TOP_ARC[1],
+    draw.arc(bbox, start=TOP_ARC[0], end=TOP_ARC[1],
              fill=ARROW_COLOR, width=int(round(thick)))
     _draw_arrow_head(draw, cx, cy, R, TOP_ARC[1], thick)
 
@@ -139,6 +143,22 @@ def render(size: int) -> Image.Image:
     _draw_arrow_head(draw, cx, cy, R, BOTTOM_ARC[1], thick)
 
     return img
+
+
+def render(size: int) -> Image.Image:
+    """
+    Render the icon at the given square size with macOS-style outer
+    padding (~10% on each side), so the content occupies ~80% of the
+    canvas and matches the Dock's visual sizing of system icons.
+    """
+    inset_px = int(round(size * INSET_RATIO))
+    content_size = size - 2 * inset_px
+    if content_size <= 0:
+        return _render_content(size)   # safety net for very small renders
+    content = _render_content(content_size)
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    canvas.paste(content, (inset_px, inset_px), content)
+    return canvas
 
 
 # Standard macOS .iconset entries: (pixel size, file name)
