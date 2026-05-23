@@ -108,75 +108,95 @@ PER_ENV_FIELDS: list[tuple] = [
 
 
 # ─────────────────────────────────────────────────────────────────────── #
-#  Two-file .env store                                                    #
+#  Three-file .env store                                                  #
 # ─────────────────────────────────────────────────────────────────────── #
 
-# Order matters: shared-key collisions resolve by "first wins", so the
-# live file is authoritative for shared settings if the two files
-# disagree (this only happens if the user hand-edits inconsistently).
-_LOAD_ORDER = ("live", "demo")
+# Buckets used by snapshot/write to address one file at a time.
+SHARED = "shared"
+_FILE_BUCKETS = (SHARED, "live", "demo")
 
 
 class EnvStore:
     """
-    In-memory representation of the project's per-env config files.
-    Each Tradovate environment has its own dotenv file with unsuffixed
-    keys; shared settings appear in BOTH files (duplicated). Saving
-    via the GUI keeps the shared keys in sync.
+    In-memory representation of the project's THREE dotenv files:
 
-    Layout on disk:
-        .env.live           .env.demo
-        ──────────          ──────────
-        TRADOVATE_USERNAME=…   TRADOVATE_USERNAME=…
-        TRADOVATE_PASSWORD=…   TRADOVATE_PASSWORD=…
-        PROXY_LISTEN_PORT=8080 PROXY_LISTEN_PORT=8081
-        IBKR_WATCHED_ACCOUNTS= IBKR_WATCHED_ACCOUNTS=
-        ─ shared ─             ─ shared ─
-        PROXY_LISTEN_HOST=…    PROXY_LISTEN_HOST=…
-        REPLICATION_MODE=…     REPLICATION_MODE=…
-        ...                    ...
+        .env        — shared settings (proxy host, replication
+                      policy, logging, app metadata)
+        .env.live   — LIVE-only credentials, port, IBKR watchlist
+        .env.demo   — DEMO-only credentials, port, IBKR watchlist
 
-    Layout in memory (unchanged from the single-file model — the
-    only difference is that load()/write() now touch two files):
+    Layout in memory:
 
         self.shared    = {"PROXY_LISTEN_HOST": "127.0.0.1", ...}
         self.per_env   = {"live": {"TRADOVATE_USERNAME": "foo", ...},
                           "demo": {"TRADOVATE_USERNAME": "",    ...}}
+
+    The GUI can save just the files that actually changed (targeted
+    write) so the two engines never end up touching each other's
+    config — modifying DEMO while LIVE is running cannot disturb
+    LIVE's file on disk.
+
+    Migration: if .env doesn't exist yet but .env.live or .env.demo
+    contains shared keys (legacy from the previous design where
+    they were duplicated in both env files), load() still picks the
+    shared values up — they migrate to .env on the next Save.
     """
 
     def __init__(self, project_root: Path):
+        self.shared_path: Path = project_root / ".env"
         self.env_paths: dict[str, Path] = {
             env: project_root / f".env.{env}" for env in ENVIRONMENTS
         }
         self.shared:  dict[str, str]            = {}
         self.per_env: dict[str, dict[str, str]] = {e: {} for e in ENVIRONMENTS}
 
+    # ── parsing helper ────────────────────────────────────────────── #
+
+    @staticmethod
+    def _parse(path: Path) -> dict[str, str]:
+        out: dict[str, str] = {}
+        if not path.exists():
+            return out
+        for line in path.read_text().splitlines():
+            s = line.strip()
+            if not s or s.startswith("#") or "=" not in s:
+                continue
+            k, _, v = s.partition("=")
+            out[k.strip()] = v.strip()
+        return out
+
     # ── load ──────────────────────────────────────────────────────── #
 
     def load(self) -> None:
+        """
+        Read all three files into memory. Shared keys come from .env
+        (authoritative); anything found in .env.live / .env.demo that
+        looks shared is treated as legacy and migrated transparently
+        (next Save writes it into .env and drops it from the env
+        files).
+        """
         self.shared = {}
         self.per_env = {e: {} for e in ENVIRONMENTS}
 
-        for env in _LOAD_ORDER:
-            path = self.env_paths[env]
-            if not path.exists():
+        # 1. Shared file (authoritative for shared keys).
+        for k, v in self._parse(self.shared_path).items():
+            if k == "TRADOVATE_ENVIRONMENT":
                 continue
-            for line in path.read_text().splitlines():
-                s = line.strip()
-                if not s or s.startswith("#") or "=" not in s:
-                    continue
-                k, _, v = s.partition("=")
-                k, v = k.strip(), v.strip()
+            if k in PER_ENV_KEYS:
+                continue   # shared file shouldn't have per-env keys
+            self.shared[k] = v
 
-                # Filename determines env; an in-file TRADOVATE_ENVIRONMENT
-                # is informational only and gets ignored on read.
+        # 2. Env-specific files.
+        for env in ENVIRONMENTS:
+            for k, v in self._parse(self.env_paths[env]).items():
                 if k == "TRADOVATE_ENVIRONMENT":
                     continue
-
                 if k in PER_ENV_KEYS:
                     self.per_env[env][k] = v
                 else:
-                    # Shared key: first file wins (live before demo).
+                    # Legacy stray shared key in an env file. Use
+                    # setdefault so we don't overwrite the canonical
+                    # .env value if both exist.
                     self.shared.setdefault(k, v)
 
     # ── value access ──────────────────────────────────────────────── #
@@ -192,56 +212,95 @@ class EnvStore:
         else:
             self.shared[key] = value
 
-    def snapshot(self) -> tuple:
-        return (
-            tuple(sorted(self.shared.items())),
-            tuple((env, tuple(sorted(self.per_env[env].items())))
-                  for env in ENVIRONMENTS),
-        )
+    # ── snapshot (per-file, used for dirty tracking) ──────────────── #
 
-    # ── write ─────────────────────────────────────────────────────── #
-
-    def write(self) -> None:
+    def snapshot_per_file(self) -> dict[str, tuple]:
+        snap: dict[str, tuple] = {
+            SHARED: tuple(sorted(self.shared.items())),
+        }
         for env in ENVIRONMENTS:
-            self.env_paths[env].write_text(
-                "\n".join(self._build_file_content(env))
-            )
+            snap[env] = tuple(sorted(self.per_env[env].items()))
+        return snap
 
-    def _build_file_content(self, env: str) -> list[str]:
-        """Emit a clean dotenv layout for one env's file. Per-env keys
-        come from self.per_env[env] (unsuffixed); shared keys are
-        duplicated from self.shared."""
-        per = self.per_env[env]
-        lines = [
-            f"# TradeSynchronizer configuration for the {env.upper()} engine.",
-            "# Auto-managed by the GUI — feel free to edit by hand.",
+    # Convenience: combined snapshot, equivalent to old .snapshot().
+    def snapshot(self) -> tuple:
+        s = self.snapshot_per_file()
+        return tuple(s[bucket] for bucket in _FILE_BUCKETS)
+
+    # ── write (targeted) ──────────────────────────────────────────── #
+
+    def write(self, only: set[str] | None = None) -> list[Path]:
+        """
+        Write the dotenv files. If `only` is None, write all three;
+        otherwise write only the named buckets ('shared', 'live',
+        'demo'). Returns the list of paths actually written.
+
+        Targeted writes are the heart of environment independence:
+        if the user modified only the Demo tab and clicks Save, only
+        .env.demo gets touched — .env.live's mtime stays unchanged,
+        so a running LIVE engine can't possibly notice anything.
+        """
+        if only is None:
+            only = set(_FILE_BUCKETS)
+        written: list[Path] = []
+        if SHARED in only:
+            self.shared_path.write_text("\n".join(self._build_shared()))
+            written.append(self.shared_path)
+        for env in ENVIRONMENTS:
+            if env in only:
+                self.env_paths[env].write_text(
+                    "\n".join(self._build_env(env))
+                )
+                written.append(self.env_paths[env])
+        return written
+
+    def _build_shared(self) -> list[str]:
+        s = self.shared
+        return [
+            "# TradeSynchronizer — settings shared by every engine.",
+            "# Auto-managed by the GUI's \"General\" tab — feel free to edit by hand.",
+            "# Per-environment data (credentials, ports, IBKR watch lists) lives",
+            "# in .env.live and .env.demo.",
             "",
-            "# ── Tradovate (LEADER account) credentials ─────────────────────── #",
-            f"TRADOVATE_USERNAME={per.get('TRADOVATE_USERNAME', '')}",
-            f"TRADOVATE_PASSWORD={per.get('TRADOVATE_PASSWORD', '')}",
-            f"TRADOVATE_APP_ID={self.shared.get('TRADOVATE_APP_ID', 'TradeSynchronizer')}",
-            f"TRADOVATE_APP_VERSION={self.shared.get('TRADOVATE_APP_VERSION', '1.0')}",
-            f"TRADOVATE_CID={per.get('TRADOVATE_CID', '')}",
-            f"TRADOVATE_SEC={per.get('TRADOVATE_SEC', '')}",
-            f"TRADOVATE_ACCOUNT_ID={per.get('TRADOVATE_ACCOUNT_ID', '')}",
+            "# ── Tradovate application metadata ──────────────────────────────── #",
+            f"TRADOVATE_APP_ID={s.get('TRADOVATE_APP_ID', 'TradeSynchronizer')}",
+            f"TRADOVATE_APP_VERSION={s.get('TRADOVATE_APP_VERSION', '1.0')}",
             "",
-            "# ── IBKR accounts to mirror ────────────────────────────────────── #",
-            f"IBKR_WATCHED_ACCOUNTS={per.get('IBKR_WATCHED_ACCOUNTS', '')}",
+            "# ── Proxy listen host (ports are per-engine) ────────────────────── #",
+            f"PROXY_LISTEN_HOST={s.get('PROXY_LISTEN_HOST', '127.0.0.1')}",
             "",
-            "# ── Proxy server ───────────────────────────────────────────────── #",
-            f"PROXY_LISTEN_HOST={self.shared.get('PROXY_LISTEN_HOST', '127.0.0.1')}",
-            f"PROXY_LISTEN_PORT={per.get('PROXY_LISTEN_PORT', PER_ENV_DEFAULTS['PROXY_LISTEN_PORT'][env])}",
+            "# ── Replication policy ──────────────────────────────────────────── #",
+            f"REPLICATION_MODE={s.get('REPLICATION_MODE', 'mirror')}",
+            f"SKIP_PROTECTIVE_STOPS={s.get('SKIP_PROTECTIVE_STOPS', 'true')}",
             "",
-            "# ── Replication policy ─────────────────────────────────────────── #",
-            f"REPLICATION_MODE={self.shared.get('REPLICATION_MODE', 'mirror')}",
-            f"SKIP_PROTECTIVE_STOPS={self.shared.get('SKIP_PROTECTIVE_STOPS', 'true')}",
-            "",
-            "# ── Logging ────────────────────────────────────────────────────── #",
-            f"LOG_LEVEL={self.shared.get('LOG_LEVEL', 'INFO')}",
-            f"LOG_FILE={self.shared.get('LOG_FILE', '/tmp/tradesync.log')}",
+            "# ── Logging ─────────────────────────────────────────────────────── #",
+            f"LOG_LEVEL={s.get('LOG_LEVEL', 'INFO')}",
+            f"LOG_FILE={s.get('LOG_FILE', '/tmp/tradesync.log')}",
             "",
         ]
-        return lines
+
+    def _build_env(self, env: str) -> list[str]:
+        p = self.per_env[env]
+        default_port = PER_ENV_DEFAULTS["PROXY_LISTEN_PORT"][env]
+        return [
+            f"# TradeSynchronizer — {env.upper()} engine private settings.",
+            f"# Auto-managed by the GUI's \"{env.capitalize()}\" tab — feel free to edit by hand.",
+            "# Shared settings (proxy host, replication, logging) live in .env.",
+            "",
+            "# ── Tradovate (LEADER account) credentials ─────────────────────── #",
+            f"TRADOVATE_USERNAME={p.get('TRADOVATE_USERNAME', '')}",
+            f"TRADOVATE_PASSWORD={p.get('TRADOVATE_PASSWORD', '')}",
+            f"TRADOVATE_CID={p.get('TRADOVATE_CID', '')}",
+            f"TRADOVATE_SEC={p.get('TRADOVATE_SEC', '')}",
+            f"TRADOVATE_ACCOUNT_ID={p.get('TRADOVATE_ACCOUNT_ID', '')}",
+            "",
+            "# ── IBKR accounts to mirror ────────────────────────────────────── #",
+            f"IBKR_WATCHED_ACCOUNTS={p.get('IBKR_WATCHED_ACCOUNTS', '')}",
+            "",
+            "# ── Proxy listen port ──────────────────────────────────────────── #",
+            f"PROXY_LISTEN_PORT={p.get('PROXY_LISTEN_PORT', default_port)}",
+            "",
+        ]
 
 
 # ─────────────────────────────────────────────────────────────────────── #
@@ -468,12 +527,18 @@ class TradeSyncApp:
         self.env_widgets: dict[str, dict[str, tk.Variable]] = {
             env: {} for env in ENVIRONMENTS
         }
-        # Per-env UI state slots
-        self.engine_buttons: dict[str, tuple[ttk.Button, ttk.Button]] = {}
-        self.engine_status:  dict[str, tuple[tk.Canvas, int, ttk.Label]] = {}
+        # Per-env engine-toggle UI slots (one toggle inside each per-
+        # env tab; no engine cards in the header anymore).
+        self.engine_toggle: dict[str, ttk.Button] = {}
+        self.engine_status: dict[str, tuple[tk.Canvas, int, ttk.Label]] = {}
 
         self._dirty = False
-        self._saved_snapshot: tuple = self.store.snapshot()
+        # Per-file dirty tracking. Keys are 'shared' / 'live' / 'demo'.
+        # Allows targeted writes: changing only the Demo tab and saving
+        # touches only .env.demo — .env and .env.live stay byte-identical
+        # on disk so a running LIVE engine can't be disturbed.
+        self._saved_snapshot_per_file: dict[str, tuple] = \
+            self.store.snapshot_per_file()
         self._suppress_sync = False
 
         self._init_style()
@@ -521,17 +586,11 @@ class TradeSyncApp:
         self.save_btn.pack(side="right", padx=(6, 0))
         self.reload_btn.pack(side="right")
 
-        # Engines row — two cards side by side.
-        engines = ttk.Frame(outer)
-        engines.pack(fill="x", pady=(4, 12))
-        for env in ENVIRONMENTS:
-            card = self._build_engine_card(engines, env)
-            card.pack(side="left", fill="both", expand=True,
-                      padx=(0, 6) if env == "live" else (6, 0))
-
         # Tabs: General | Live | Demo | Log
+        # Engine on/off toggles live INSIDE the per-env tabs (top of
+        # each Live / Demo tab) — see _build_per_env_tab.
         self.notebook = ttk.Notebook(outer)
-        self.notebook.pack(fill="both", expand=True)
+        self.notebook.pack(fill="both", expand=True, pady=(8, 0))
 
         general_tab = ttk.Frame(self.notebook)
         self.notebook.add(general_tab, text="General")
@@ -551,10 +610,32 @@ class TradeSyncApp:
         # General is active by default per the spec.
         self.notebook.select(general_tab)
 
-    def _build_engine_card(self, parent, env: str) -> ttk.LabelFrame:
-        card = ttk.LabelFrame(parent, text=f"{env.upper()} engine", padding=10)
+    def _build_general_tab(self, parent):
+        self._render_fields(parent, GENERAL_FIELDS, env=None)
 
-        status_row = ttk.Frame(card)
+    def _build_per_env_tab(self, parent, env: str):
+        """
+        Per-env tab layout: an engine toggle panel pinned at the top
+        (always visible, no scroll), then the scrollable form for
+        that env's settings below.
+        """
+        panel = self._build_engine_panel(parent, env)
+        panel.pack(fill="x", padx=12, pady=(12, 0))
+
+        form_container = ttk.Frame(parent)
+        form_container.pack(fill="both", expand=True)
+        self._render_fields(form_container, PER_ENV_FIELDS, env=env)
+
+    def _build_engine_panel(self, parent, env: str) -> ttk.LabelFrame:
+        """
+        The ACTIVE/STOPPED toggle for one environment. Shows a status
+        dot + state label + listen port, and a single big button
+        that flips between "Start engine" and "Stop engine".
+        """
+        panel = ttk.LabelFrame(parent, text=f"{env.upper()} engine",
+                               padding=10)
+
+        status_row = ttk.Frame(panel)
         status_row.pack(fill="x")
         dot = tk.Canvas(status_row, width=14, height=14,
                         highlightthickness=0, bg=self.root.cget("bg"))
@@ -564,23 +645,13 @@ class TradeSyncApp:
         label.pack(side="left", padx=(8, 0))
         self.engine_status[env] = (dot, dot_id, label)
 
-        btns = ttk.Frame(card)
-        btns.pack(fill="x", pady=(8, 0))
-        start_btn = ttk.Button(btns, text="Start",
-                               command=lambda e=env: self._on_start(e))
-        stop_btn = ttk.Button(btns, text="Stop",
-                              command=lambda e=env: self._on_stop(e))
-        start_btn.pack(side="left", fill="x", expand=True)
-        stop_btn.pack(side="left", fill="x", expand=True, padx=(6, 0))
-        self.engine_buttons[env] = (start_btn, stop_btn)
-
-        return card
-
-    def _build_general_tab(self, parent):
-        self._render_fields(parent, GENERAL_FIELDS, env=None)
-
-    def _build_per_env_tab(self, parent, env: str):
-        self._render_fields(parent, PER_ENV_FIELDS, env=env)
+        toggle = ttk.Button(
+            panel, text="▶  Start engine",
+            command=lambda e=env: self._toggle_engine(e),
+        )
+        toggle.pack(fill="x", pady=(10, 0))
+        self.engine_toggle[env] = toggle
+        return panel
 
     def _build_log_tab(self, parent):
         toolbar = ttk.Frame(parent)
@@ -711,29 +782,63 @@ class TradeSyncApp:
     def _load_settings(self):
         self.store.load()
         self._populate_form_from_store()
-        self._saved_snapshot = self.store.snapshot()
+        self._saved_snapshot_per_file = self.store.snapshot_per_file()
         self._dirty = False
         self._refresh_save_button()
 
-    def _save_settings(self):
+    def _dirty_files(self) -> set[str]:
+        """Return which of {'shared', 'live', 'demo'} have unsaved
+        changes in the form, by comparing the current store state
+        against the snapshot taken at the last load/save."""
         self._flush_widgets_to_store()
+        now = self.store.snapshot_per_file()
+        return {bucket for bucket, snap in now.items()
+                if snap != self._saved_snapshot_per_file.get(bucket)}
+
+    def _save_settings(self):
+        dirty = self._dirty_files()
+        if not dirty:
+            self._append_log("⚙️  Nothing to save.\n")
+            return
         err = self._validate_all()
         if err:
             messagebox.showerror("Invalid settings", err)
             return
         try:
-            self.store.write()
+            written = self.store.write(only=dirty)
         except OSError as e:
             messagebox.showerror(
                 "Save failed",
-                f"Could not write .env.live / .env.demo: {e}",
+                f"Could not write .env files: {e}",
             )
             return
-        self._saved_snapshot = self.store.snapshot()
+        self._saved_snapshot_per_file = self.store.snapshot_per_file()
         self._dirty = False
         self._refresh_save_button()
-        paths = ", ".join(str(p) for p in self.store.env_paths.values())
+        paths = ", ".join(p.name for p in written)
         self._append_log(f"⚙️  Saved {paths}\n")
+        # If the user just rewrote a file whose engine is currently
+        # running, warn that the change won't take effect until the
+        # engine restarts.
+        for env in ENVIRONMENTS:
+            if env in dirty and self.controllers[env].state in (
+                ProxyController.STATE_STARTING,
+                ProxyController.STATE_RUNNING,
+            ):
+                self._append_log(
+                    f"   ↪ {env.upper()} engine is running with the "
+                    f"previous values — stop & start to apply.\n"
+                )
+        if SHARED in dirty:
+            running = [env for env in ENVIRONMENTS
+                       if self.controllers[env].state in (
+                           ProxyController.STATE_STARTING,
+                           ProxyController.STATE_RUNNING)]
+            if running:
+                self._append_log(
+                    f"   ↪ shared settings changed — restart "
+                    f"{', '.join(e.upper() for e in running)} to apply.\n"
+                )
 
     def _validate_all(self) -> Optional[str]:
         """
@@ -828,8 +933,7 @@ class TradeSyncApp:
     def _on_widget_change(self, *_):
         if self._suppress_sync:
             return
-        self._flush_widgets_to_store()
-        is_dirty = self.store.snapshot() != self._saved_snapshot
+        is_dirty = bool(self._dirty_files())
         if is_dirty != self._dirty:
             self._dirty = is_dirty
             self._refresh_save_button()
@@ -839,13 +943,29 @@ class TradeSyncApp:
 
     # ── controller events ─────────────────────────────────────────── #
 
+    def _toggle_engine(self, env: str):
+        """Single entry point for the ACTIVE/STOPPED button in each
+        per-env tab. Decides whether to start or stop based on the
+        current state of THAT env's controller — completely
+        independent of the other env."""
+        state = self.controllers[env].state
+        if state in (ProxyController.STATE_STARTING,
+                     ProxyController.STATE_RUNNING):
+            self._on_stop(env)
+        else:
+            self._on_start(env)
+
     def _on_start(self, env: str):
         self._flush_widgets_to_store()
         err = self._validate_env(env)
         if err:
             messagebox.showerror("Cannot start", err)
             return
-        if self._dirty:
+        # Save only the files affected by the user's pending edits;
+        # we never touch the OTHER engine's file, even if that env's
+        # widgets happen to be dirty too — independence is the rule.
+        dirty = self._dirty_files()
+        if dirty:
             if not messagebox.askyesno(
                 "Unsaved changes",
                 "You have unsaved changes. Save them first?",
@@ -871,6 +991,7 @@ class TradeSyncApp:
         self.controllers[env].stop()
 
     def _refresh_engine_state(self, env: str, state: str):
+        # Update the per-env tab's status dot + label.
         dot, dot_id, label = self.engine_status[env]
         dot.itemconfigure(dot_id, fill=_STATE_COLOR[state])
         port = self.store.per_env[env].get(
@@ -878,11 +999,29 @@ class TradeSyncApp:
             PER_ENV_DEFAULTS["PROXY_LISTEN_PORT"][env],
         )
         label.configure(text=f"{_STATE_LABEL[state]}  :{port}")
-        start_btn, stop_btn = self.engine_buttons[env]
-        is_running = state in (ProxyController.STATE_STARTING,
-                               ProxyController.STATE_RUNNING)
-        start_btn.configure(state="disabled" if is_running else "normal")
-        stop_btn.configure(state="normal" if is_running else "disabled")
+
+        # Flip the toggle button between Start ↔ Stop based on state.
+        # Disable it only briefly while STARTING (to prevent a
+        # second click during the spawn race); STOP is always usable
+        # from STARTING/RUNNING.
+        toggle = self.engine_toggle[env]
+        is_active = state in (ProxyController.STATE_STARTING,
+                              ProxyController.STATE_RUNNING)
+        if state == ProxyController.STATE_STARTING:
+            toggle.configure(text="…  Starting", state="disabled")
+        elif state == ProxyController.STATE_RUNNING:
+            toggle.configure(text="■  Stop engine", state="normal")
+        else:
+            toggle.configure(text="▶  Start engine", state="normal")
+
+        # At-a-glance: stamp a dot next to the env's tab title when
+        # active, so the user can see status without switching tabs.
+        if env in self.env_tabs:
+            base = env.capitalize()
+            self.notebook.tab(
+                self.env_tabs[env],
+                text=(f"{base}  ●" if is_active else base),
+            )
 
     # ── log streaming ─────────────────────────────────────────────── #
 

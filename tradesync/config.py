@@ -1,15 +1,20 @@
 """
-Config loader — reads the env-specific .env file (.env.live or
-.env.demo) next to the project root.
+Config loader — reads the project's three dotenv files:
+
+    .env        — settings shared by every engine
+    .env.live   — LIVE-only credentials, port, IBKR watchlist
+    .env.demo   — DEMO-only credentials, port, IBKR watchlist
 
 Centralizes every external knob so the rest of the codebase never
 touches `os.environ` directly. Validation is deliberately strict:
-missing required credentials abort startup instead of failing
-later inside an order-placement call.
+missing required credentials abort startup instead of failing later
+inside an order-placement call.
 
-Each environment has its own dotenv file with unsuffixed keys.
-Shared settings (proxy host, replication policy, logging) appear
-in BOTH files; the GUI keeps them in sync on Save.
+Loading order at runtime is fixed: shared first, then env-specific.
+If a key happens to appear in both files, the env-specific value
+wins. Any value already present in os.environ (e.g. an override
+passed by the GUI when spawning the subprocess) takes precedence
+over everything in the files.
 """
 
 from __future__ import annotations
@@ -19,11 +24,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 
 # Project root (the directory containing this package's parent).
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+SHARED_ENV_FILE = PROJECT_ROOT / ".env"
 
 
 # Tradovate REST base URLs by environment (matches the JS adapter).
@@ -34,12 +41,42 @@ _TRADOVATE_BASE = {
 
 
 def env_file_for(env: str) -> Path:
-    """Path to the dotenv file that holds `env`'s configuration."""
+    """Path to the env-specific dotenv file."""
     if env not in _TRADOVATE_BASE:
         raise ValueError(
             f"TRADOVATE_ENVIRONMENT must be 'demo' or 'live', got '{env}'"
         )
     return PROJECT_ROOT / f".env.{env}"
+
+
+def _merge_into_environ(env: str) -> None:
+    """
+    Read .env (shared) + .env.<env> (env-specific) and merge them
+    into os.environ with the following precedence:
+
+        os.environ (existing — GUI overrides win)
+          >  .env.<env>
+          >  .env
+
+    We use dotenv_values to read the files into dicts WITHOUT
+    touching os.environ, then write them in with setdefault so any
+    pre-existing value (e.g. PROXY_LISTEN_PORT passed by the GUI
+    when spawning this subprocess) survives unchanged.
+    """
+    layers: List[dict] = []
+    if SHARED_ENV_FILE.exists():
+        layers.append({k: v for k, v in dotenv_values(SHARED_ENV_FILE).items()
+                       if v is not None})
+    env_file = env_file_for(env)
+    if env_file.exists():
+        layers.append({k: v for k, v in dotenv_values(env_file).items()
+                       if v is not None})
+
+    merged: dict = {}
+    for layer in layers:                 # later layers override earlier
+        merged.update(layer)
+    for k, v in merged.items():
+        os.environ.setdefault(k, v)      # never override existing env vars
 
 
 @dataclass
@@ -100,10 +137,10 @@ class Config:
         if not env_file.exists():
             raise RuntimeError(
                 f"Config file not found: {env_file}\n"
-                f"Open TradeSynchronizer.app to create it, or copy the "
-                f"layout from .env.live / .env.demo in the repo."
+                f"Open TradeSynchronizer.app and use the "
+                f"'{env.capitalize()}' tab to create it."
             )
-        load_dotenv(env_file)
+        _merge_into_environ(env)
 
         required = {
             "TRADOVATE_USERNAME": os.getenv("TRADOVATE_USERNAME") or "",
