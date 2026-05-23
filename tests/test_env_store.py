@@ -1,6 +1,6 @@
 """
-Unit tests for tradesync.ui.app.EnvStore — the environment-aware
-.env reader/writer that backs the GUI's Settings tab.
+Unit tests for tradesync.ui.app.EnvStore — the two-file dotenv
+manager that backs the GUI's Settings tab.
 
 Run from the repo root:
 
@@ -13,27 +13,28 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tradesync.ui.app import ENVIRONMENTS, PER_ENV_KEYS, EnvStore
+from tradesync.ui.app import (
+    ENVIRONMENTS, PER_ENV_DEFAULTS, PER_ENV_KEYS, EnvStore,
+)
 
 
 class _TmpEnv:
-    """Context manager: scratch dir with .env and (optional) .env.example."""
+    """Context manager: scratch project_root with optional .env.live
+    and .env.demo files."""
 
-    def __init__(self, env_text: str | None = None,
-                 template_text: str | None = None):
-        self.env_text = env_text
-        self.template_text = template_text
+    def __init__(self, live_text: str | None = None,
+                 demo_text: str | None = None):
+        self.live_text = live_text
+        self.demo_text = demo_text
 
     def __enter__(self):
         self._tmp = tempfile.TemporaryDirectory()
         root = Path(self._tmp.name)
-        env = root / ".env"
-        tpl = root / ".env.example"
-        if self.env_text is not None:
-            env.write_text(self.env_text)
-        if self.template_text is not None:
-            tpl.write_text(self.template_text)
-        return EnvStore(env_path=env, template_path=tpl)
+        if self.live_text is not None:
+            (root / ".env.live").write_text(self.live_text)
+        if self.demo_text is not None:
+            (root / ".env.demo").write_text(self.demo_text)
+        return EnvStore(project_root=root)
 
     def __exit__(self, *exc):
         self._tmp.cleanup()
@@ -41,126 +42,107 @@ class _TmpEnv:
 
 class TestEnvStoreLoad(unittest.TestCase):
 
-    def test_load_missing_file_uses_template(self):
-        tpl = "TRADOVATE_APP_ID=FromTemplate\nTRADOVATE_ENVIRONMENT=demo\n"
-        with _TmpEnv(env_text=None, template_text=tpl) as s:
-            s.load()
-            self.assertEqual(s.shared["TRADOVATE_APP_ID"], "FromTemplate")
-            self.assertEqual(s.active_env, "demo")
-
-    def test_load_missing_file_and_no_template_is_clean(self):
-        with _TmpEnv(env_text=None, template_text=None) as s:
+    def test_load_no_files_is_clean(self):
+        with _TmpEnv() as s:
             s.load()
             self.assertEqual(s.shared, {})
             for env in ENVIRONMENTS:
                 self.assertEqual(s.per_env[env], {})
-            self.assertEqual(s.active_env, "demo")
 
-    def test_load_legacy_unsuffixed_assigns_to_active_env(self):
-        legacy = (
+    def test_load_only_live(self):
+        live = (
             "TRADOVATE_USERNAME=u_live\n"
             "TRADOVATE_PASSWORD=p_live\n"
             "TRADOVATE_CID=cid_live\n"
             "TRADOVATE_SEC=sec_live\n"
-            "TRADOVATE_ENVIRONMENT=live\n"
             "TRADOVATE_ACCOUNT_ID=1290252\n"
             "IBKR_WATCHED_ACCOUNTS=U7713037\n"
-            "TRADOVATE_APP_ID=TradeSynchronizer\n"
             "PROXY_LISTEN_PORT=8080\n"
             "PROXY_LISTEN_HOST=127.0.0.1\n"
+            "TRADOVATE_APP_ID=TradeSynchronizer\n"
+            "REPLICATION_MODE=mirror\n"
         )
-        with _TmpEnv(env_text=legacy) as s:
+        with _TmpEnv(live_text=live) as s:
             s.load()
-            self.assertEqual(s.active_env, "live")
-            # Per-env values land in the active env. PROXY_LISTEN_PORT
-            # is now per-env too, so legacy 8080 also migrates here.
+            # Per-env keys land in per_env[live]
             self.assertEqual(s.per_env["live"]["TRADOVATE_USERNAME"], "u_live")
-            self.assertEqual(s.per_env["live"]["IBKR_WATCHED_ACCOUNTS"], "U7713037")
-            self.assertEqual(s.per_env["live"]["TRADOVATE_ACCOUNT_ID"], "1290252")
             self.assertEqual(s.per_env["live"]["PROXY_LISTEN_PORT"], "8080")
-            # The other env is empty (no demo data in legacy file)
-            self.assertEqual(s.per_env["demo"], {})
-            # Truly shared things land in shared
-            self.assertEqual(s.shared["TRADOVATE_APP_ID"], "TradeSynchronizer")
-            self.assertEqual(s.shared["PROXY_LISTEN_HOST"], "127.0.0.1")
-
-    def test_load_new_format(self):
-        new_format = (
-            "TRADOVATE_ENVIRONMENT=demo\n"
-            "TRADOVATE_USERNAME_LIVE=u_live\n"
-            "TRADOVATE_USERNAME_DEMO=u_demo\n"
-            "TRADOVATE_PASSWORD_LIVE=p_live\n"
-            "TRADOVATE_PASSWORD_DEMO=p_demo\n"
-            "TRADOVATE_CID_LIVE=cid_live\n"
-            "TRADOVATE_CID_DEMO=cid_demo\n"
-            "TRADOVATE_SEC_LIVE=sec_live\n"
-            "TRADOVATE_SEC_DEMO=sec_demo\n"
-            "IBKR_WATCHED_ACCOUNTS_LIVE=U7713037\n"
-            "IBKR_WATCHED_ACCOUNTS_DEMO=DU1234567\n"
-            "PROXY_LISTEN_HOST=127.0.0.1\n"
-        )
-        with _TmpEnv(env_text=new_format) as s:
-            s.load()
-            self.assertEqual(s.active_env, "demo")
-            self.assertEqual(s.per_env["live"]["TRADOVATE_USERNAME"], "u_live")
-            self.assertEqual(s.per_env["demo"]["TRADOVATE_USERNAME"], "u_demo")
             self.assertEqual(s.per_env["live"]["IBKR_WATCHED_ACCOUNTS"], "U7713037")
-            self.assertEqual(s.per_env["demo"]["IBKR_WATCHED_ACCOUNTS"], "DU1234567")
+            # Demo is empty (no file)
+            self.assertEqual(s.per_env["demo"], {})
+            # Shared keys land in shared
+            self.assertEqual(s.shared["PROXY_LISTEN_HOST"], "127.0.0.1")
+            self.assertEqual(s.shared["TRADOVATE_APP_ID"], "TradeSynchronizer")
 
-    def test_suffixed_wins_over_legacy_for_same_key(self):
-        mixed = (
-            "TRADOVATE_ENVIRONMENT=live\n"
-            "TRADOVATE_USERNAME=u_legacy\n"
-            "TRADOVATE_USERNAME_LIVE=u_new_live\n"
+    def test_load_both_files(self):
+        live = (
+            "TRADOVATE_USERNAME=u_live\n"
+            "PROXY_LISTEN_PORT=8080\n"
+            "PROXY_LISTEN_HOST=127.0.0.1\n"
+            "REPLICATION_MODE=mirror\n"
         )
-        with _TmpEnv(env_text=mixed) as s:
+        demo = (
+            "TRADOVATE_USERNAME=u_demo\n"
+            "PROXY_LISTEN_PORT=8081\n"
+            "PROXY_LISTEN_HOST=127.0.0.1\n"
+            "REPLICATION_MODE=mirror\n"
+        )
+        with _TmpEnv(live_text=live, demo_text=demo) as s:
             s.load()
-            # Suffixed wins for live; legacy fills only gaps in active env
-            self.assertEqual(s.per_env["live"]["TRADOVATE_USERNAME"], "u_new_live")
+            self.assertEqual(s.per_env["live"]["TRADOVATE_USERNAME"], "u_live")
+            self.assertEqual(s.per_env["live"]["PROXY_LISTEN_PORT"], "8080")
+            self.assertEqual(s.per_env["demo"]["TRADOVATE_USERNAME"], "u_demo")
+            self.assertEqual(s.per_env["demo"]["PROXY_LISTEN_PORT"], "8081")
+            # Shared values match in both files → no conflict
+            self.assertEqual(s.shared["PROXY_LISTEN_HOST"], "127.0.0.1")
+            self.assertEqual(s.shared["REPLICATION_MODE"], "mirror")
 
-    def test_invalid_active_env_defaults_to_demo(self):
-        with _TmpEnv(env_text="TRADOVATE_ENVIRONMENT=banana\n") as s:
+    def test_shared_conflict_resolves_live_first(self):
+        """If the two files disagree on a shared key (hand-edited
+        inconsistently), the live file's value wins because we load
+        live first."""
+        live = "PROXY_LISTEN_HOST=10.0.0.1\nLOG_LEVEL=DEBUG\n"
+        demo = "PROXY_LISTEN_HOST=192.168.1.1\nLOG_LEVEL=ERROR\n"
+        with _TmpEnv(live_text=live, demo_text=demo) as s:
             s.load()
-            self.assertEqual(s.active_env, "demo")
+            self.assertEqual(s.shared["PROXY_LISTEN_HOST"], "10.0.0.1")
+            self.assertEqual(s.shared["LOG_LEVEL"], "DEBUG")
+
+    def test_in_file_tradovate_environment_is_ignored(self):
+        """TRADOVATE_ENVIRONMENT lines in the files are informational
+        only — the filename determines the env."""
+        live = "TRADOVATE_ENVIRONMENT=demo\nTRADOVATE_USERNAME=u_live\n"
+        with _TmpEnv(live_text=live) as s:
+            s.load()
+            # u_live still lands in per_env[live] because file is .env.live
+            self.assertEqual(s.per_env["live"]["TRADOVATE_USERNAME"], "u_live")
+            # And TRADOVATE_ENVIRONMENT is not stored anywhere
+            self.assertNotIn("TRADOVATE_ENVIRONMENT", s.shared)
 
 
 class TestEnvStoreGetSet(unittest.TestCase):
 
-    def test_get_for_per_env_returns_active_env_value(self):
-        with _TmpEnv(env_text="") as s:
+    def test_get_env_per_env(self):
+        with _TmpEnv() as s:
             s.load()
             s.per_env["live"]["TRADOVATE_USERNAME"] = "live_u"
             s.per_env["demo"]["TRADOVATE_USERNAME"] = "demo_u"
-            s.active_env = "live"
-            self.assertEqual(s.get("TRADOVATE_USERNAME"), "live_u")
-            s.active_env = "demo"
-            self.assertEqual(s.get("TRADOVATE_USERNAME"), "demo_u")
+            self.assertEqual(s.get_env("live", "TRADOVATE_USERNAME"), "live_u")
+            self.assertEqual(s.get_env("demo", "TRADOVATE_USERNAME"), "demo_u")
 
-    def test_set_writes_to_active_env_only(self):
-        with _TmpEnv(env_text="") as s:
+    def test_set_env_per_env(self):
+        with _TmpEnv() as s:
             s.load()
-            s.active_env = "live"
-            s.set("TRADOVATE_USERNAME", "live_u")
-            s.active_env = "demo"
-            s.set("TRADOVATE_USERNAME", "demo_u")
+            s.set_env("live", "TRADOVATE_USERNAME", "live_u")
+            s.set_env("demo", "TRADOVATE_USERNAME", "demo_u")
             self.assertEqual(s.per_env["live"]["TRADOVATE_USERNAME"], "live_u")
             self.assertEqual(s.per_env["demo"]["TRADOVATE_USERNAME"], "demo_u")
 
-    def test_set_environment_switches_active(self):
-        with _TmpEnv(env_text="") as s:
-            s.load()
-            s.set("TRADOVATE_ENVIRONMENT", "live")
-            self.assertEqual(s.active_env, "live")
-            s.set("TRADOVATE_ENVIRONMENT", "DEMO")  # case insensitive
-            self.assertEqual(s.active_env, "demo")
-            s.set("TRADOVATE_ENVIRONMENT", "banana")  # invalid → no-op
-            self.assertEqual(s.active_env, "demo")
-
     def test_shared_key_not_per_env(self):
-        with _TmpEnv(env_text="") as s:
+        with _TmpEnv() as s:
             s.load()
             # PROXY_LISTEN_HOST is shared; PROXY_LISTEN_PORT is per-env.
-            s.set("PROXY_LISTEN_HOST", "0.0.0.0")
+            s.set_env("live", "PROXY_LISTEN_HOST", "0.0.0.0")
             self.assertEqual(s.shared["PROXY_LISTEN_HOST"], "0.0.0.0")
             self.assertNotIn("PROXY_LISTEN_HOST", s.per_env["live"])
             self.assertNotIn("PROXY_LISTEN_HOST", s.per_env["demo"])
@@ -169,9 +151,8 @@ class TestEnvStoreGetSet(unittest.TestCase):
 class TestEnvStoreWrite(unittest.TestCase):
 
     def test_roundtrip_preserves_data(self):
-        with _TmpEnv(env_text="") as s:
+        with _TmpEnv() as s:
             s.load()
-            s.active_env = "live"
             s.per_env["live"] = {
                 "TRADOVATE_USERNAME": "u_live",
                 "TRADOVATE_PASSWORD": "p_live",
@@ -201,88 +182,90 @@ class TestEnvStoreWrite(unittest.TestCase):
             })
             s.write()
 
+            # Both files should exist now
+            for env in ENVIRONMENTS:
+                self.assertTrue(s.env_paths[env].exists(),
+                                f"{env} file not written")
+
             # Reload from disk and verify everything survived
-            s2 = EnvStore(env_path=s.env_path, template_path=s.template_path)
+            s2 = EnvStore(project_root=s.env_paths["live"].parent)
             s2.load()
-            self.assertEqual(s2.active_env, "live")
             self.assertEqual(s2.per_env["live"]["TRADOVATE_USERNAME"], "u_live")
             self.assertEqual(s2.per_env["demo"]["TRADOVATE_USERNAME"], "u_demo")
-            self.assertEqual(s2.per_env["live"]["IBKR_WATCHED_ACCOUNTS"], "U7713037")
-            self.assertEqual(s2.per_env["demo"]["IBKR_WATCHED_ACCOUNTS"], "DU9999999")
             self.assertEqual(s2.per_env["live"]["PROXY_LISTEN_PORT"], "8080")
             self.assertEqual(s2.per_env["demo"]["PROXY_LISTEN_PORT"], "8081")
+            self.assertEqual(s2.per_env["live"]["IBKR_WATCHED_ACCOUNTS"], "U7713037")
+            self.assertEqual(s2.per_env["demo"]["IBKR_WATCHED_ACCOUNTS"], "DU9999999")
             self.assertEqual(s2.shared["PROXY_LISTEN_HOST"], "127.0.0.1")
             self.assertEqual(s2.shared["REPLICATION_MODE"], "mirror")
 
-    def test_legacy_to_new_migration(self):
-        """Load a legacy .env, write, reload — data preserved + suffixed."""
-        legacy = (
-            "TRADOVATE_ENVIRONMENT=live\n"
-            "TRADOVATE_USERNAME=amoreyda1977\n"
-            "TRADOVATE_PASSWORD=secret\n"
-            "TRADOVATE_CID=xxx\n"
-            "TRADOVATE_SEC=xxx\n"
-            "TRADOVATE_ACCOUNT_ID=1290252\n"
-            "IBKR_WATCHED_ACCOUNTS=U7713037\n"
-            "TRADOVATE_APP_ID=TradeSynchronizer\n"
-            "TRADOVATE_APP_VERSION=1.0\n"
-            "PROXY_LISTEN_HOST=127.0.0.1\n"
-            "PROXY_LISTEN_PORT=8080\n"
-            "REPLICATION_MODE=mirror\n"
-            "SKIP_PROTECTIVE_STOPS=true\n"
-            "LOG_LEVEL=INFO\n"
-            "LOG_FILE=/tmp/tradesync.log\n"
-        )
-        with _TmpEnv(env_text=legacy) as s:
+    def test_write_shared_settings_appear_in_both_files(self):
+        with _TmpEnv() as s:
+            s.load()
+            s.shared.update({
+                "PROXY_LISTEN_HOST": "10.0.0.99",
+                "REPLICATION_MODE": "market",
+                "LOG_LEVEL": "DEBUG",
+                "LOG_FILE": "/tmp/x.log",
+            })
+            s.write()
+            for env in ENVIRONMENTS:
+                content = s.env_paths[env].read_text()
+                self.assertIn("PROXY_LISTEN_HOST=10.0.0.99", content)
+                self.assertIn("REPLICATION_MODE=market", content)
+                self.assertIn("LOG_LEVEL=DEBUG", content)
+                self.assertIn("LOG_FILE=/tmp/x.log", content)
+
+    def test_write_uses_per_env_default_port(self):
+        """Empty per_env[env]['PROXY_LISTEN_PORT'] falls back to the
+        smart default (8080 for live, 8081 for demo)."""
+        with _TmpEnv() as s:
             s.load()
             s.write()
-            on_disk = s.env_path.read_text()
+            live_content = s.env_paths["live"].read_text()
+            demo_content = s.env_paths["demo"].read_text()
+            self.assertIn(
+                f"PROXY_LISTEN_PORT={PER_ENV_DEFAULTS['PROXY_LISTEN_PORT']['live']}",
+                live_content,
+            )
+            self.assertIn(
+                f"PROXY_LISTEN_PORT={PER_ENV_DEFAULTS['PROXY_LISTEN_PORT']['demo']}",
+                demo_content,
+            )
 
-            # New format markers should be present
-            self.assertIn("TRADOVATE_USERNAME_LIVE=amoreyda1977", on_disk)
-            self.assertIn("TRADOVATE_USERNAME_DEMO=", on_disk)
-            self.assertIn("IBKR_WATCHED_ACCOUNTS_LIVE=U7713037", on_disk)
-            # Legacy unsuffixed lines should NOT survive
-            for legacy_key in (
-                "TRADOVATE_USERNAME=", "TRADOVATE_PASSWORD=",
-                "IBKR_WATCHED_ACCOUNTS=",
-            ):
-                self.assertNotIn("\n" + legacy_key, on_disk)
-
-            s2 = EnvStore(env_path=s.env_path, template_path=s.template_path)
-            s2.load()
-            self.assertEqual(s2.per_env["live"]["TRADOVATE_USERNAME"], "amoreyda1977")
-            self.assertEqual(s2.per_env["live"]["IBKR_WATCHED_ACCOUNTS"], "U7713037")
-            # Demo credentials are emitted with empty strings on write
-            # (and come back empty on reload). PROXY_LISTEN_PORT is an
-            # exception: write() emits its per-env default (8081 for
-            # demo) so the user has a working port out of the box.
-            from tradesync.ui.app import PER_ENV_DEFAULTS
-            for k in PER_ENV_KEYS:
-                expected = PER_ENV_DEFAULTS.get(k, {}).get("demo", "")
-                self.assertEqual(s2.per_env["demo"].get(k, ""), expected,
-                                 f"Unexpected demo value for {k}")
+    def test_write_does_not_emit_suffixed_keys(self):
+        """No more _LIVE / _DEMO suffixes anywhere — each file uses
+        unsuffixed keys."""
+        with _TmpEnv() as s:
+            s.load()
+            s.per_env["live"]["TRADOVATE_USERNAME"] = "u_live"
+            s.per_env["demo"]["TRADOVATE_USERNAME"] = "u_demo"
+            s.write()
+            for env in ENVIRONMENTS:
+                content = s.env_paths[env].read_text()
+                self.assertNotIn("_LIVE=", content)
+                self.assertNotIn("_DEMO=", content)
 
 
 class TestSnapshot(unittest.TestCase):
 
     def test_snapshot_changes_on_any_edit(self):
-        with _TmpEnv(env_text="") as s:
+        with _TmpEnv() as s:
             s.load()
             before = s.snapshot()
-            s.active_env = "live"
-            s.set("TRADOVATE_USERNAME", "foo")
+            s.set_env("live", "TRADOVATE_USERNAME", "foo")
             after = s.snapshot()
             self.assertNotEqual(before, after)
 
-    def test_snapshot_includes_active_env(self):
-        with _TmpEnv(env_text="") as s:
+    def test_snapshot_distinguishes_envs(self):
+        with _TmpEnv() as s:
             s.load()
-            s.active_env = "live"
-            snap_live = s.snapshot()
-            s.active_env = "demo"
-            snap_demo = s.snapshot()
-            self.assertNotEqual(snap_live, snap_demo)
+            s.set_env("live", "TRADOVATE_USERNAME", "x")
+            snap1 = s.snapshot()
+            s.set_env("demo", "TRADOVATE_USERNAME", "x")
+            snap2 = s.snapshot()
+            # Same value in different envs → still a different snapshot
+            self.assertNotEqual(snap1, snap2)
 
 
 if __name__ == "__main__":

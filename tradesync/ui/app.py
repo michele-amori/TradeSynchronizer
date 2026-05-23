@@ -108,97 +108,76 @@ PER_ENV_FIELDS: list[tuple] = [
 
 
 # ─────────────────────────────────────────────────────────────────────── #
-#  Environment-aware .env store                                           #
+#  Two-file .env store                                                    #
 # ─────────────────────────────────────────────────────────────────────── #
+
+# Order matters: shared-key collisions resolve by "first wins", so the
+# live file is authoritative for shared settings if the two files
+# disagree (this only happens if the user hand-edits inconsistently).
+_LOAD_ORDER = ("live", "demo")
+
 
 class EnvStore:
     """
-    In-memory representation of an environment-aware .env file.
+    In-memory representation of the project's per-env config files.
+    Each Tradovate environment has its own dotenv file with unsuffixed
+    keys; shared settings appear in BOTH files (duplicated). Saving
+    via the GUI keeps the shared keys in sync.
 
     Layout on disk:
+        .env.live           .env.demo
+        ──────────          ──────────
+        TRADOVATE_USERNAME=…   TRADOVATE_USERNAME=…
+        TRADOVATE_PASSWORD=…   TRADOVATE_PASSWORD=…
+        PROXY_LISTEN_PORT=8080 PROXY_LISTEN_PORT=8081
+        IBKR_WATCHED_ACCOUNTS= IBKR_WATCHED_ACCOUNTS=
+        ─ shared ─             ─ shared ─
+        PROXY_LISTEN_HOST=…    PROXY_LISTEN_HOST=…
+        REPLICATION_MODE=…     REPLICATION_MODE=…
+        ...                    ...
 
-        TRADOVATE_ENVIRONMENT=live            # default for CLI mode
-        TRADOVATE_APP_ID=TradeSynchronizer    # shared
-        TRADOVATE_USERNAME_LIVE=foo           # per-env: live
-        TRADOVATE_USERNAME_DEMO=              # per-env: demo
-        PROXY_LISTEN_PORT_LIVE=8080
-        PROXY_LISTEN_PORT_DEMO=8081
-        ...
+    Layout in memory (unchanged from the single-file model — the
+    only difference is that load()/write() now touch two files):
 
-    Layout in memory:
-
-        self.shared    = {"TRADOVATE_APP_ID": "TradeSynchronizer", ...}
+        self.shared    = {"PROXY_LISTEN_HOST": "127.0.0.1", ...}
         self.per_env   = {"live": {"TRADOVATE_USERNAME": "foo", ...},
                           "demo": {"TRADOVATE_USERNAME": "",    ...}}
-        self.active_env = "live"  # only relevant for legacy migration
-                                  # and as the CLI-mode default; the
-                                  # GUI doesn't expose it.
-
-    Legacy .env files (no _LIVE / _DEMO suffixes) are auto-migrated:
-    on load() the unsuffixed values go into whatever env is active.
-    On the next write() the file is re-emitted in the suffixed
-    format. One-way transition triggered by the first GUI Save.
     """
 
-    def __init__(self, env_path: Path, template_path: Optional[Path] = None):
-        self.env_path = env_path
-        self.template_path = template_path
+    def __init__(self, project_root: Path):
+        self.env_paths: dict[str, Path] = {
+            env: project_root / f".env.{env}" for env in ENVIRONMENTS
+        }
         self.shared:  dict[str, str]            = {}
         self.per_env: dict[str, dict[str, str]] = {e: {} for e in ENVIRONMENTS}
-        self.active_env: str = "demo"
 
     # ── load ──────────────────────────────────────────────────────── #
 
     def load(self) -> None:
         self.shared = {}
         self.per_env = {e: {} for e in ENVIRONMENTS}
-        self.active_env = "demo"
 
-        source = self.env_path if self.env_path.exists() else self.template_path
-        if source is None or not source.exists():
-            return
-
-        legacy: dict[str, str] = {}
-        active_seen: Optional[str] = None
-
-        for line in source.read_text().splitlines():
-            s = line.strip()
-            if not s or s.startswith("#") or "=" not in s:
+        for env in _LOAD_ORDER:
+            path = self.env_paths[env]
+            if not path.exists():
                 continue
-            k, _, v = s.partition("=")
-            k, v = k.strip(), v.strip()
+            for line in path.read_text().splitlines():
+                s = line.strip()
+                if not s or s.startswith("#") or "=" not in s:
+                    continue
+                k, _, v = s.partition("=")
+                k, v = k.strip(), v.strip()
 
-            if k == "TRADOVATE_ENVIRONMENT":
-                lo = v.lower()
-                if lo in ENVIRONMENTS:
-                    active_seen = lo
-                continue
+                # Filename determines env; an in-file TRADOVATE_ENVIRONMENT
+                # is informational only and gets ignored on read.
+                if k == "TRADOVATE_ENVIRONMENT":
+                    continue
 
-            # Suffixed per-env keys take precedence.
-            matched_suffix = False
-            for env in ENVIRONMENTS:
-                suf = "_" + env.upper()
-                if k.endswith(suf):
-                    base = k[: -len(suf)]
-                    if base in PER_ENV_KEYS:
-                        self.per_env[env][base] = v
-                        matched_suffix = True
-                        break
-            if matched_suffix:
-                continue
-
-            # Legacy unsuffixed per-env keys: stash for fallback.
-            if k in PER_ENV_KEYS:
-                legacy[k] = v
-                continue
-
-            self.shared[k] = v
-
-        if active_seen is not None:
-            self.active_env = active_seen
-
-        for k, v in legacy.items():
-            self.per_env[self.active_env].setdefault(k, v)
+                if k in PER_ENV_KEYS:
+                    self.per_env[env][k] = v
+                else:
+                    # Shared key: first file wins (live before demo).
+                    self.shared.setdefault(k, v)
 
     # ── value access ──────────────────────────────────────────────── #
 
@@ -213,23 +192,8 @@ class EnvStore:
         else:
             self.shared[key] = value
 
-    # Active-env-aware shortcuts (used only by legacy CLI/tests).
-    def get(self, key: str) -> str:
-        if key == "TRADOVATE_ENVIRONMENT":
-            return self.active_env
-        return self.get_env(self.active_env, key)
-
-    def set(self, key: str, value: str) -> None:
-        if key == "TRADOVATE_ENVIRONMENT":
-            lo = value.lower()
-            if lo in ENVIRONMENTS:
-                self.active_env = lo
-            return
-        self.set_env(self.active_env, key, value)
-
     def snapshot(self) -> tuple:
         return (
-            self.active_env,
             tuple(sorted(self.shared.items())),
             tuple((env, tuple(sorted(self.per_env[env].items())))
                   for env in ENVIRONMENTS),
@@ -238,47 +202,46 @@ class EnvStore:
     # ── write ─────────────────────────────────────────────────────── #
 
     def write(self) -> None:
-        lines: list[str] = [
-            "# TradeSynchronizer configuration.",
+        for env in ENVIRONMENTS:
+            self.env_paths[env].write_text(
+                "\n".join(self._build_file_content(env))
+            )
+
+    def _build_file_content(self, env: str) -> list[str]:
+        """Emit a clean dotenv layout for one env's file. Per-env keys
+        come from self.per_env[env] (unsuffixed); shared keys are
+        duplicated from self.shared."""
+        per = self.per_env[env]
+        lines = [
+            f"# TradeSynchronizer configuration for the {env.upper()} engine.",
             "# Auto-managed by the GUI — feel free to edit by hand.",
             "",
-            "# Default environment for CLI mode (`python main.py` directly).",
-            "# The GUI starts each engine with an explicit env override and",
-            "# ignores this value.",
-            f"TRADOVATE_ENVIRONMENT={self.active_env}",
-            "",
-            "# ── Tradovate application (shared across environments) ────── #",
+            "# ── Tradovate (LEADER account) credentials ─────────────────────── #",
+            f"TRADOVATE_USERNAME={per.get('TRADOVATE_USERNAME', '')}",
+            f"TRADOVATE_PASSWORD={per.get('TRADOVATE_PASSWORD', '')}",
             f"TRADOVATE_APP_ID={self.shared.get('TRADOVATE_APP_ID', 'TradeSynchronizer')}",
             f"TRADOVATE_APP_VERSION={self.shared.get('TRADOVATE_APP_VERSION', '1.0')}",
-        ]
-        for env in ENVIRONMENTS:
-            lines += [
-                "",
-                f"# ── {env.upper()} environment ───────────────────────────────────────── #",
-            ]
-            for k in ("TRADOVATE_USERNAME", "TRADOVATE_PASSWORD",
-                      "TRADOVATE_CID", "TRADOVATE_SEC",
-                      "TRADOVATE_ACCOUNT_ID",
-                      "PROXY_LISTEN_PORT",
-                      "IBKR_WATCHED_ACCOUNTS"):
-                default = PER_ENV_DEFAULTS.get(k, {}).get(env, "")
-                lines.append(f"{k}_{env.upper()}={self.per_env[env].get(k, default)}")
-
-        lines += [
+            f"TRADOVATE_CID={per.get('TRADOVATE_CID', '')}",
+            f"TRADOVATE_SEC={per.get('TRADOVATE_SEC', '')}",
+            f"TRADOVATE_ACCOUNT_ID={per.get('TRADOVATE_ACCOUNT_ID', '')}",
             "",
-            "# ── Proxy server (shared host) ─────────────────────────────── #",
+            "# ── IBKR accounts to mirror ────────────────────────────────────── #",
+            f"IBKR_WATCHED_ACCOUNTS={per.get('IBKR_WATCHED_ACCOUNTS', '')}",
+            "",
+            "# ── Proxy server ───────────────────────────────────────────────── #",
             f"PROXY_LISTEN_HOST={self.shared.get('PROXY_LISTEN_HOST', '127.0.0.1')}",
+            f"PROXY_LISTEN_PORT={per.get('PROXY_LISTEN_PORT', PER_ENV_DEFAULTS['PROXY_LISTEN_PORT'][env])}",
             "",
-            "# ── Replication policy ─────────────────────────────────────── #",
+            "# ── Replication policy ─────────────────────────────────────────── #",
             f"REPLICATION_MODE={self.shared.get('REPLICATION_MODE', 'mirror')}",
             f"SKIP_PROTECTIVE_STOPS={self.shared.get('SKIP_PROTECTIVE_STOPS', 'true')}",
             "",
-            "# ── Logging ────────────────────────────────────────────────── #",
+            "# ── Logging ────────────────────────────────────────────────────── #",
             f"LOG_LEVEL={self.shared.get('LOG_LEVEL', 'INFO')}",
             f"LOG_FILE={self.shared.get('LOG_FILE', '/tmp/tradesync.log')}",
             "",
         ]
-        self.env_path.write_text("\n".join(lines))
+        return lines
 
 
 # ─────────────────────────────────────────────────────────────────────── #
@@ -484,10 +447,7 @@ class TradeSyncApp:
 
     def __init__(self, project_root: Path):
         self.project_root = project_root
-        self.store = EnvStore(
-            env_path=project_root / ".env",
-            template_path=project_root / ".env.example",
-        )
+        self.store = EnvStore(project_root)
         self.log_q: queue.Queue[str] = queue.Queue(maxsize=40_000)
 
         # One ProxyController per environment.
@@ -764,13 +724,16 @@ class TradeSyncApp:
         try:
             self.store.write()
         except OSError as e:
-            messagebox.showerror("Save failed",
-                                 f"Could not write {self.store.env_path}: {e}")
+            messagebox.showerror(
+                "Save failed",
+                f"Could not write .env.live / .env.demo: {e}",
+            )
             return
         self._saved_snapshot = self.store.snapshot()
         self._dirty = False
         self._refresh_save_button()
-        self._append_log(f"⚙️  Saved {self.store.env_path}\n")
+        paths = ", ".join(str(p) for p in self.store.env_paths.values())
+        self._append_log(f"⚙️  Saved {paths}\n")
 
     def _validate_all(self) -> Optional[str]:
         """

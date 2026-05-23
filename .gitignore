@@ -1,5 +1,9 @@
-# Credentials — NEVER commit these
+# Credentials — NEVER commit these. Each env's config lives in its
+# own file (.env.live / .env.demo); both are user-local with secrets,
+# so neither belongs in version control.
 .env
+.env.live
+.env.demo
 .env.local
 .env.*.local
 

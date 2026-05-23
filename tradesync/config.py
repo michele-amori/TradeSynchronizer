@@ -1,10 +1,15 @@
 """
-Config loader — reads `.env` next to the project root.
+Config loader — reads the env-specific .env file (.env.live or
+.env.demo) next to the project root.
 
 Centralizes every external knob so the rest of the codebase never
 touches `os.environ` directly. Validation is deliberately strict:
 missing required credentials abort startup instead of failing
 later inside an order-placement call.
+
+Each environment has its own dotenv file with unsuffixed keys.
+Shared settings (proxy host, replication policy, logging) appear
+in BOTH files; the GUI keeps them in sync on Save.
 """
 
 from __future__ import annotations
@@ -19,7 +24,6 @@ from dotenv import load_dotenv
 
 # Project root (the directory containing this package's parent).
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_ENV_FILE = PROJECT_ROOT / ".env"
 
 
 # Tradovate REST base URLs by environment (matches the JS adapter).
@@ -27,6 +31,15 @@ _TRADOVATE_BASE = {
     "demo": "https://demo.tradovateapi.com/v1",
     "live": "https://live.tradovateapi.com/v1",
 }
+
+
+def env_file_for(env: str) -> Path:
+    """Path to the dotenv file that holds `env`'s configuration."""
+    if env not in _TRADOVATE_BASE:
+        raise ValueError(
+            f"TRADOVATE_ENVIRONMENT must be 'demo' or 'live', got '{env}'"
+        )
+    return PROJECT_ROOT / f".env.{env}"
 
 
 @dataclass
@@ -62,64 +75,68 @@ class Config:
     @classmethod
     def load(cls) -> "Config":
         """
-        Read .env, validate required fields, return a Config.
+        Read the env-specific dotenv file, validate required fields,
+        return a Config.
 
-        Per-environment credentials (USERNAME/PASSWORD/CID/SEC/ACCOUNT_ID
-        and IBKR_WATCHED_ACCOUNTS) are read from the suffixed key
-        first — e.g. `TRADOVATE_USERNAME_LIVE` when env=live — then
-        fall back to the un-suffixed legacy key for backward compat
-        with .env files written before the demo/live split.
+        Resolution order for TRADOVATE_ENVIRONMENT:
+          1. If TRADOVATE_ENVIRONMENT is already set in os.environ
+             (e.g. via subprocess env-var override from the GUI), use
+             it — and DON'T let load_dotenv overwrite it.
+          2. Otherwise, default to 'demo' for safety; the user can
+             override per-invocation via the shell.
+
+        Then `.env.<env>` is loaded with override=False semantics
+        (the default for python-dotenv), so any env vars already set
+        in os.environ (including PROXY_LISTEN_PORT, LOG_FILE, etc.
+        passed by the GUI) keep their values from the caller.
         """
-        load_dotenv(_ENV_FILE)
-
         env = (os.getenv("TRADOVATE_ENVIRONMENT") or "demo").lower()
         if env not in _TRADOVATE_BASE:
             raise RuntimeError(
                 f"TRADOVATE_ENVIRONMENT must be 'demo' or 'live', got '{env}'"
             )
-        suffix = "_" + env.upper()
 
-        def per_env(key: str) -> str:
-            """Suffixed key first, then un-suffixed legacy fallback."""
-            return (os.getenv(key + suffix)
-                    or os.getenv(key)
-                    or "")
+        env_file = env_file_for(env)
+        if not env_file.exists():
+            raise RuntimeError(
+                f"Config file not found: {env_file}\n"
+                f"Open TradeSynchronizer.app to create it, or copy the "
+                f"layout from .env.live / .env.demo in the repo."
+            )
+        load_dotenv(env_file)
 
         required = {
-            "TRADOVATE_USERNAME": per_env("TRADOVATE_USERNAME"),
-            "TRADOVATE_PASSWORD": per_env("TRADOVATE_PASSWORD"),
-            "TRADOVATE_CID":      per_env("TRADOVATE_CID"),
-            "TRADOVATE_SEC":      per_env("TRADOVATE_SEC"),
+            "TRADOVATE_USERNAME": os.getenv("TRADOVATE_USERNAME") or "",
+            "TRADOVATE_PASSWORD": os.getenv("TRADOVATE_PASSWORD") or "",
+            "TRADOVATE_CID":      os.getenv("TRADOVATE_CID") or "",
+            "TRADOVATE_SEC":      os.getenv("TRADOVATE_SEC") or "",
         }
         missing = [k for k, v in required.items() if not v]
         if missing:
             raise RuntimeError(
                 f"Missing required {env.upper()} credential(s): "
                 + ", ".join(missing) +
-                f". Open TradeSynchronizer.app or edit {_ENV_FILE} "
-                f"and fill the *_{env.upper()} fields."
+                f". Open TradeSynchronizer.app or edit {env_file} and "
+                f"fill them in."
             )
 
-        acct_id_raw = per_env("TRADOVATE_ACCOUNT_ID").strip()
+        acct_id_raw = (os.getenv("TRADOVATE_ACCOUNT_ID") or "").strip()
         acct_id = int(acct_id_raw) if acct_id_raw else None
 
         replication_mode = (os.getenv("REPLICATION_MODE") or "mirror").lower()
         if replication_mode not in ("mirror", "market"):
             raise RuntimeError(
-                f"REPLICATION_MODE must be 'mirror' or 'market', got '{replication_mode}'"
+                f"REPLICATION_MODE must be 'mirror' or 'market', got "
+                f"'{replication_mode}'"
             )
 
         skip_stops_raw = (os.getenv("SKIP_PROTECTIVE_STOPS") or "true").lower()
         skip_stops = skip_stops_raw in ("1", "true", "yes", "on")
 
-        watched_raw = per_env("IBKR_WATCHED_ACCOUNTS").strip()
+        watched_raw = (os.getenv("IBKR_WATCHED_ACCOUNTS") or "").strip()
         watched = [a.strip() for a in watched_raw.split(",") if a.strip()]
 
-        # Proxy listen port is per-env (two engines must bind two ports).
-        # The GUI also passes an explicit PROXY_LISTEN_PORT override via
-        # subprocess env var; that wins because os.getenv is read after
-        # load_dotenv and load_dotenv doesn't overwrite existing vars.
-        port_raw = (per_env("PROXY_LISTEN_PORT")
+        port_raw = (os.getenv("PROXY_LISTEN_PORT")
                     or ("8080" if env == "live" else "8081"))
         try:
             proxy_port = int(port_raw)
