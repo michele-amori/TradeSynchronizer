@@ -82,13 +82,20 @@ cp .env.example .env
 
 Open `.env` and fill in:
 
-- **Tradovate credentials**: get `TRADOVATE_CID` (string!) and
+- **Tradovate credentials** *per environment*: each of `LIVE` and
+  `DEMO` has its own block (`TRADOVATE_USERNAME_LIVE`,
+  `TRADOVATE_USERNAME_DEMO`, etc.) so you can keep both accounts
+  configured simultaneously. Get `TRADOVATE_CID` (string!) and
   `TRADOVATE_SEC` from <https://trader.tradovate.com/welcome> →
-  *API Access*. Set `TRADOVATE_ENVIRONMENT=demo` for paper, `live`
-  for live.
-- **`TRADOVATE_ACCOUNT_ID`**: pin the account id of the LEADER you
-  configured on TradeSyncer. If empty, the first account from
-  `/account/list` is used (fine for single-account users).
+  *API Access*.
+- **`TRADOVATE_ACCOUNT_ID_LIVE` / `_DEMO`**: pin each environment's
+  LEADER account id. If empty, the first account from
+  `/account/list` is used.
+- **`PROXY_LISTEN_PORT_LIVE` / `_DEMO`**: each engine binds to its
+  own port (default 8080 and 8081). TradingView's `--proxy-server`
+  flag must point at the engine you want to feed.
+- **`TRADOVATE_ENVIRONMENT`**: only matters in CLI mode (the GUI
+  starts each engine with an explicit override).
 
 ### 3. Trust the mitmproxy CA on macOS
 
@@ -120,19 +127,27 @@ After §1 of *One-time setup*, build the .app bundle once:
 This produces `TradeSynchronizer.app` in the project root. Drag it to
 `/Applications` (or to the Dock) and double-click to launch.
 
-The UI has three pieces:
+The UI is dual-engine: LIVE and DEMO run as independent subprocesses,
+each on its own port, and can be active simultaneously.
 
-- **Header** with a Start / Stop button and a coloured status dot
-  (grey = stopped, amber = starting, green = running, red = error).
-- **Settings tab** — a form bound to `.env`. Edit any value, click
-  **Save**, and the file is rewritten while preserving the layout of
-  `.env.example`. A `*` next to *Save* marks unsaved changes; clicking
-  *Start* with unsaved changes prompts to save first.
-- **Log tab** — live tail of the proxy's stdout, dark theme, with
-  auto-scroll toggle and Clear button.
+- **Header**: two side-by-side engine cards (LIVE, DEMO), each with
+  a status dot (grey = stopped, amber = starting, green = running,
+  red = error), the current port, and a Start / Stop button pair.
+  *Reload* and *Save* (with a `*` when dirty) sit in the top-right.
+- **General tab** *(active by default)*: settings shared by both
+  engines — app metadata, proxy listen host, replication policy,
+  logging.
+- **Live tab** / **Demo tab**: per-environment credentials, the
+  engine's listen port, and the IBKR account(s) to mirror. The two
+  tabs are mirrors of each other — fill in one or both depending
+  on which engine(s) you intend to use.
+- **Log tab**: merged stdout of both engines, with `[LIVE]` lines
+  tinted soft-red and `[DEMO]` lines tinted soft-blue so trades are
+  always attributable at a glance. A legend in the toolbar
+  documents the colour mapping.
 
-Closing the window while the proxy is running asks for confirmation
-and then sends SIGTERM (fallback SIGKILL after 5 s) before quitting.
+Closing the window while any engine is running asks for confirmation
+and sends SIGTERM to each (fallback SIGKILL after 5 s) before quitting.
 
 The bundle is a thin shell wrapper: it just invokes `gui.py` using
 the project's `.venv` interpreter (or `python3` from PATH as fallback).
@@ -148,13 +163,15 @@ source .venv/bin/activate
 python main.py
 ```
 
-You should see:
+You should see (note the `[LIVE]` / `[DEMO]` tag in every line —
+when both engines run via the GUI those logs interleave in
+/tmp/tradesync.log and the tag tells them apart):
 
 ```
-HH:MM:SS INFO    tradesync.bootstrap  TradeSynchronizer starting up
-HH:MM:SS INFO    tradesync.tradovate  Tradovate auth OK — userId=…
-HH:MM:SS INFO    tradesync.addon      TradeSyncAddon active — listening for IBKR orders on api.ibkr.com
-HH:MM:SS INFO    tradesync.bootstrap  mitmproxy listening on 127.0.0.1:8080
+HH:MM:SS INFO    [LIVE] tradesync.bootstrap  TradeSynchronizer starting up
+HH:MM:SS INFO    [LIVE] tradesync.tradovate  Tradovate auth OK — userId=…
+HH:MM:SS INFO    [LIVE] tradesync.addon      TradeSyncAddon active — listening for IBKR orders on api.ibkr.com
+HH:MM:SS INFO    [LIVE] tradesync.bootstrap  mitmproxy listening on 127.0.0.1:8080
 ```
 
 ### Launch TradingView Desktop through the proxy
@@ -170,9 +187,9 @@ Place an order on IBKR from TradingView as usual. In the
 TradeSynchronizer log (GUI **Log** tab or terminal) you'll see:
 
 ```
-HH:MM:SS INFO    tradesync.addon      📥 IBKR order intercepted: BUY 1 U1234567 @ conid=… type=LMT price=21500.0 …
-HH:MM:SS INFO    tradesync.tradovate  Placing Tradovate order: {…}
-HH:MM:SS INFO    tradesync.addon      ✅ Replicated to Tradovate orderId=987654
+HH:MM:SS INFO    [LIVE] tradesync.addon      📥 IBKR order intercepted: BUY 1 U1234567 @ conid=… type=LMT price=21500.0 …
+HH:MM:SS INFO    [LIVE] tradesync.tradovate  Placing Tradovate order: {…}
+HH:MM:SS INFO    [LIVE] tradesync.addon      ✅ Replicated to Tradovate orderId=987654
 ```
 
 TradeSyncer then fans the LEADER fill out to every follower
@@ -184,10 +201,10 @@ Set via `.env`:
 
 | Variable | Effect |
 |---|---|
-| `REPLICATION_MODE=mirror` *(default)* | Match the IBKR order type 1:1 (MKT→Market, LMT→Limit with same price, STP→Stop, STP LMT→StopLimit) |
+| `REPLICATION_MODE=mirror` *(default)* | Match the IBKR order type 1:1 (MKT→Market, LMT→Limit with same price, STP→Stop, STP LMT→StopLimit) — shared by both engines |
 | `REPLICATION_MODE=market` | Always send a Market order on Tradovate, regardless of the IBKR type — fastest sync, no missed fills |
 | `SKIP_PROTECTIVE_STOPS=true` *(default)* | Don't replicate `STP` / `STP LMT` orders (they're usually protective stop-loss orders on existing IBKR positions, and Tradesyncer's followers manage their own stops) |
-| `IBKR_WATCHED_ACCOUNTS=U1234567,U2345678` | Only replicate orders from these IBKR accounts. Empty = all accounts |
+| `IBKR_WATCHED_ACCOUNTS_LIVE`, `IBKR_WATCHED_ACCOUNTS_DEMO` | Per-engine: only replicate orders from these IBKR account(s). Empty = all accounts. Typically you'd set the LIVE engine to watch your live IBKR account (`U…`) and the DEMO engine to watch a paper account (`DU…`). |
 
 ## Troubleshooting
 

@@ -36,6 +36,13 @@ from tradesync.replicator import Replicator
 
 
 def _setup_logging(cfg: Config) -> None:
+    """
+    Configure root logging. The env-tag (`[LIVE]` / `[DEMO]`) is baked
+    into the format so that, when the GUI runs both engines side by
+    side and their stdout streams interleave in the Log tab and in
+    /tmp/tradesync.log, every line is unambiguously attributable.
+    """
+    env_tag = f"[{cfg.tradovate_env.upper()}]"
     level = getattr(logging, cfg.log_level, logging.INFO)
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     try:
@@ -45,7 +52,7 @@ def _setup_logging(cfg: Config) -> None:
         pass
     logging.basicConfig(
         level=level,
-        format="%(asctime)s %(levelname)-7s %(name)-22s %(message)s",
+        format=f"%(asctime)s %(levelname)-7s {env_tag:<6} %(name)-22s %(message)s",
         datefmt="%H:%M:%S",
         handlers=handlers,
         force=True,

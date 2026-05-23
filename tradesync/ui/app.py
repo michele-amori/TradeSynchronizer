@@ -1,17 +1,22 @@
 """
 TradeSynchronizer — Tkinter GUI.
 
-A minimal personal-use desktop wrapper around `main.py`:
-  • Settings tab — edit and save the .env file
-  • Log tab      — live tail of the proxy's stdout
-  • Start / Stop — spawn / terminate the main.py subprocess
+Personal-use desktop wrapper around `main.py`. Each Tradovate
+environment (LIVE and DEMO) runs as an independent mitmproxy
+subprocess, so the user can have both engines active at the same
+time, on different ports, mirroring orders to different Tradovate
+LEADER accounts.
 
-The settings store is **environment-aware**: credentials and the
-IBKR-account whitelist are kept separately for `live` and `demo`,
-both in memory and on disk (via `_LIVE` / `_DEMO` suffixed keys in
-.env). Toggling the Environment dropdown swaps the visible form
-contents without touching the other set, so flipping demo ↔ live
-preserves both credentials sets.
+UI:
+  • Engine cards (header): two status dots + Start/Stop pairs,
+    one per environment, fully independent.
+  • Tabs:
+      - General : shared settings (app metadata, proxy host,
+                  replication policy, logging) — active by default
+      - Live    : LIVE-only credentials, port, IBKR account
+      - Demo    : DEMO-only credentials, port, IBKR account
+      - Log     : merged stdout of both engines, lines coloured by
+                  env (LIVE = red-ish, DEMO = blue-ish)
 
 Zero external GUI dependencies (stdlib tkinter / ttk only).
 """
@@ -37,8 +42,10 @@ from typing import Optional
 #  Field declarations — single source of truth for the settings form     #
 # ─────────────────────────────────────────────────────────────────────── #
 
-# Keys whose values differ between the live and demo environments.
-# Everything else in _FIELDS is shared across both.
+ENVIRONMENTS = ("live", "demo")
+
+# Keys whose values differ between LIVE and DEMO. Everything else in
+# the settings file is shared across both engines.
 PER_ENV_KEYS = frozenset({
     "TRADOVATE_USERNAME",
     "TRADOVATE_PASSWORD",
@@ -46,43 +53,57 @@ PER_ENV_KEYS = frozenset({
     "TRADOVATE_SEC",
     "TRADOVATE_ACCOUNT_ID",
     "IBKR_WATCHED_ACCOUNTS",
+    "PROXY_LISTEN_PORT",
 })
 
-# Recognised environment names.
-ENVIRONMENTS = ("demo", "live")
+# Per-env defaults for fields where the LIVE and DEMO defaults must
+# differ (two processes can't bind the same port).
+PER_ENV_DEFAULTS: dict[str, dict[str, str]] = {
+    "PROXY_LISTEN_PORT": {"live": "8080", "demo": "8081"},
+}
 
-# (key, label, kind, default, options_or_help)
-# kind: text | password | choice | bool | section
-# The Environment dropdown is placed at the very top of the Tradovate
-# section because every credential field below depends on it.
-_FIELDS: list[tuple] = [
-    ("__section__", "Tradovate Account",       "section",  None, None),
-    ("TRADOVATE_ENVIRONMENT", "Environment",   "choice",   "demo", list(ENVIRONMENTS)),
+# Tuple shape: (key, label, kind, default, options_or_help)
+# kind = text | password | choice | bool | section
+GENERAL_FIELDS: list[tuple] = [
+    ("__section__", "Tradovate application",  "section",  None, None),
+    ("TRADOVATE_APP_ID",      "App ID",        "text",     "TradeSynchronizer", None),
+    ("TRADOVATE_APP_VERSION", "App version",   "text",     "1.0", None),
+
+    ("__section__", "Proxy server",            "section",  None, None),
+    ("PROXY_LISTEN_HOST", "Listen host", "text", "127.0.0.1",
+        "Both engines bind to this host. Ports are configured per engine "
+        "in the Live / Demo tabs."),
+
+    ("__section__", "Replication policy",      "section",  None, None),
+    ("REPLICATION_MODE",      "Mode",                  "choice", "mirror",
+        ["mirror", "market"]),
+    ("SKIP_PROTECTIVE_STOPS", "Skip protective stops", "bool",   "true",   None),
+
+    ("__section__", "Logging",                 "section",  None, None),
+    ("LOG_LEVEL", "Level", "choice", "INFO",
+        ["DEBUG", "INFO", "WARNING", "ERROR"]),
+    ("LOG_FILE",  "File",  "text",   "/tmp/tradesync.log",
+        "Both engines write here, tagged [LIVE] / [DEMO] for disambiguation."),
+]
+
+PER_ENV_FIELDS: list[tuple] = [
+    ("__section__", "Tradovate account",       "section",  None, None),
     ("TRADOVATE_USERNAME",    "Username",       "text",     "", None),
     ("TRADOVATE_PASSWORD",    "Password",       "password", "", None),
-    ("TRADOVATE_APP_ID",      "App ID",         "text",     "TradeSynchronizer", None),
-    ("TRADOVATE_APP_VERSION", "App version",    "text",     "1.0", None),
     ("TRADOVATE_CID",         "Client ID (CID)", "text",    "",
         "From Tradovate API Access — string, not number."),
     ("TRADOVATE_SEC",         "API secret",     "password", "", None),
     ("TRADOVATE_ACCOUNT_ID",  "Account ID",     "text",     "",
         "Optional — pins the LEADER account."),
 
-    ("__section__", "Proxy server",             "section",  None, None),
-    ("PROXY_LISTEN_HOST", "Listen host", "text", "127.0.0.1", None),
-    ("PROXY_LISTEN_PORT", "Listen port", "text", "8080",      None),
+    ("__section__", "Proxy",                   "section",  None, None),
+    ("PROXY_LISTEN_PORT", "Listen port", "text", "",
+        "Point TradingView's --proxy-server flag at this port to feed "
+        "orders to this engine."),
 
-    ("__section__", "Replication policy",       "section",  None, None),
-    ("REPLICATION_MODE",      "Mode",                  "choice", "mirror",
-        list(("mirror", "market"))),
-    ("SKIP_PROTECTIVE_STOPS", "Skip protective stops", "bool",   "true", None),
-    ("IBKR_WATCHED_ACCOUNTS", "Watched IBKR accounts", "text",   "",
-        "Comma-separated. Empty = all."),
-
-    ("__section__", "Logging",                  "section",  None, None),
-    ("LOG_LEVEL", "Level", "choice", "INFO",
-        ["DEBUG", "INFO", "WARNING", "ERROR"]),
-    ("LOG_FILE",  "File",  "text",   "/tmp/tradesync.log", None),
+    ("__section__", "IBKR account to mirror",  "section",  None, None),
+    ("IBKR_WATCHED_ACCOUNTS", "Watched accounts", "text",   "",
+        "Comma-separated IBKR account IDs (e.g. U7713037). Empty = all."),
 ]
 
 
@@ -96,10 +117,12 @@ class EnvStore:
 
     Layout on disk:
 
-        TRADOVATE_ENVIRONMENT=live          # active env selector
-        TRADOVATE_APP_ID=TradeSynchronizer  # shared
-        TRADOVATE_USERNAME_LIVE=foo         # per-env: live
-        TRADOVATE_USERNAME_DEMO=            # per-env: demo
+        TRADOVATE_ENVIRONMENT=live            # default for CLI mode
+        TRADOVATE_APP_ID=TradeSynchronizer    # shared
+        TRADOVATE_USERNAME_LIVE=foo           # per-env: live
+        TRADOVATE_USERNAME_DEMO=              # per-env: demo
+        PROXY_LISTEN_PORT_LIVE=8080
+        PROXY_LISTEN_PORT_DEMO=8081
         ...
 
     Layout in memory:
@@ -107,26 +130,26 @@ class EnvStore:
         self.shared    = {"TRADOVATE_APP_ID": "TradeSynchronizer", ...}
         self.per_env   = {"live": {"TRADOVATE_USERNAME": "foo", ...},
                           "demo": {"TRADOVATE_USERNAME": "",    ...}}
-        self.active_env = "live"
+        self.active_env = "live"  # only relevant for legacy migration
+                                  # and as the CLI-mode default; the
+                                  # GUI doesn't expose it.
 
     Legacy .env files (no _LIVE / _DEMO suffixes) are auto-migrated:
-    on `load()` the unsuffixed values go into whatever env is active.
-    On the next `write()` the file is re-emitted in the suffixed
-    format, so legacy ⇒ new is a one-way transition triggered by
-    the first Save in the GUI.
+    on load() the unsuffixed values go into whatever env is active.
+    On the next write() the file is re-emitted in the suffixed
+    format. One-way transition triggered by the first GUI Save.
     """
 
     def __init__(self, env_path: Path, template_path: Optional[Path] = None):
         self.env_path = env_path
         self.template_path = template_path
-        self.shared:  dict[str, str]               = {}
-        self.per_env: dict[str, dict[str, str]]    = {e: {} for e in ENVIRONMENTS}
+        self.shared:  dict[str, str]            = {}
+        self.per_env: dict[str, dict[str, str]] = {e: {} for e in ENVIRONMENTS}
         self.active_env: str = "demo"
 
     # ── load ──────────────────────────────────────────────────────── #
 
     def load(self) -> None:
-        # Reset before re-reading.
         self.shared = {}
         self.per_env = {e: {} for e in ENVIRONMENTS}
         self.active_env = "demo"
@@ -164,31 +187,37 @@ class EnvStore:
             if matched_suffix:
                 continue
 
-            # Legacy unsuffixed per-env keys: stash until we know the
-            # active env, then assign there as a fallback.
+            # Legacy unsuffixed per-env keys: stash for fallback.
             if k in PER_ENV_KEYS:
                 legacy[k] = v
                 continue
 
-            # Everything else is shared.
             self.shared[k] = v
 
         if active_seen is not None:
             self.active_env = active_seen
 
-        # Migrate legacy: only fill keys that weren't already covered
-        # by a suffixed value (suffixed wins).
         for k, v in legacy.items():
             self.per_env[self.active_env].setdefault(k, v)
 
     # ── value access ──────────────────────────────────────────────── #
 
+    def get_env(self, env: str, key: str) -> str:
+        if key in PER_ENV_KEYS:
+            return self.per_env[env].get(key, "")
+        return self.shared.get(key, "")
+
+    def set_env(self, env: str, key: str, value: str) -> None:
+        if key in PER_ENV_KEYS:
+            self.per_env[env][key] = value
+        else:
+            self.shared[key] = value
+
+    # Active-env-aware shortcuts (used only by legacy CLI/tests).
     def get(self, key: str) -> str:
         if key == "TRADOVATE_ENVIRONMENT":
             return self.active_env
-        if key in PER_ENV_KEYS:
-            return self.per_env[self.active_env].get(key, "")
-        return self.shared.get(key, "")
+        return self.get_env(self.active_env, key)
 
     def set(self, key: str, value: str) -> None:
         if key == "TRADOVATE_ENVIRONMENT":
@@ -196,14 +225,9 @@ class EnvStore:
             if lo in ENVIRONMENTS:
                 self.active_env = lo
             return
-        if key in PER_ENV_KEYS:
-            self.per_env[self.active_env][key] = value
-            return
-        self.shared[key] = value
+        self.set_env(self.active_env, key, value)
 
     def snapshot(self) -> tuple:
-        """Hashable snapshot of the entire store state — used for
-        dirty-flag tracking by the GUI."""
         return (
             self.active_env,
             tuple(sorted(self.shared.items())),
@@ -214,34 +238,36 @@ class EnvStore:
     # ── write ─────────────────────────────────────────────────────── #
 
     def write(self) -> None:
-        """Re-emit .env in the canonical suffixed layout."""
         lines: list[str] = [
             "# TradeSynchronizer configuration.",
             "# Auto-managed by the GUI — feel free to edit by hand.",
             "",
-            "# ── Active environment ─────────────────────────────────────── #",
-            "# 'demo' or 'live' — selects which credentials below are used.",
+            "# Default environment for CLI mode (`python main.py` directly).",
+            "# The GUI starts each engine with an explicit env override and",
+            "# ignores this value.",
             f"TRADOVATE_ENVIRONMENT={self.active_env}",
             "",
-            "# ── Tradovate app metadata (shared across environments) ────── #",
+            "# ── Tradovate application (shared across environments) ────── #",
             f"TRADOVATE_APP_ID={self.shared.get('TRADOVATE_APP_ID', 'TradeSynchronizer')}",
             f"TRADOVATE_APP_VERSION={self.shared.get('TRADOVATE_APP_VERSION', '1.0')}",
         ]
         for env in ENVIRONMENTS:
             lines += [
                 "",
-                f"# ── {env.upper()} credentials ──────────────────────────────────────── #",
+                f"# ── {env.upper()} environment ───────────────────────────────────────── #",
             ]
             for k in ("TRADOVATE_USERNAME", "TRADOVATE_PASSWORD",
                       "TRADOVATE_CID", "TRADOVATE_SEC",
-                      "TRADOVATE_ACCOUNT_ID", "IBKR_WATCHED_ACCOUNTS"):
-                lines.append(f"{k}_{env.upper()}={self.per_env[env].get(k, '')}")
+                      "TRADOVATE_ACCOUNT_ID",
+                      "PROXY_LISTEN_PORT",
+                      "IBKR_WATCHED_ACCOUNTS"):
+                default = PER_ENV_DEFAULTS.get(k, {}).get(env, "")
+                lines.append(f"{k}_{env.upper()}={self.per_env[env].get(k, default)}")
 
         lines += [
             "",
-            "# ── Proxy server ───────────────────────────────────────────── #",
+            "# ── Proxy server (shared host) ─────────────────────────────── #",
             f"PROXY_LISTEN_HOST={self.shared.get('PROXY_LISTEN_HOST', '127.0.0.1')}",
-            f"PROXY_LISTEN_PORT={self.shared.get('PROXY_LISTEN_PORT', '8080')}",
             "",
             "# ── Replication policy ─────────────────────────────────────── #",
             f"REPLICATION_MODE={self.shared.get('REPLICATION_MODE', 'mirror')}",
@@ -262,12 +288,12 @@ class EnvStore:
 class ProxyController:
     """
     Spawns `python main.py` and pipes its stdout into a thread-safe
-    queue consumed by the UI's main loop. Manages lifecycle state.
+    queue. One instance per environment.
 
     States:
         stopped   — no child process running
         starting  — process spawned, listening line not yet seen
-        running   — proxy has bound its port (mitmproxy "listening on" log)
+        running   — proxy has bound its port
         error     — process exited with a non-zero status
     """
 
@@ -278,7 +304,9 @@ class ProxyController:
 
     _RUNNING_MARKER = re.compile(r"mitmproxy listening on", re.IGNORECASE)
 
-    def __init__(self, project_root: Path, log_q: "queue.Queue[str]"):
+    def __init__(self, env: str, project_root: Path,
+                 log_q: "queue.Queue[str]"):
+        self.env = env
         self.project_root = project_root
         self.log_q = log_q
         self._process: Optional[subprocess.Popen] = None
@@ -294,7 +322,7 @@ class ProxyController:
     def on_state_change(self, cb) -> None:
         self._state_cbs.append(cb)
 
-    def start(self) -> Optional[str]:
+    def start(self, env_overrides: Optional[dict[str, str]] = None) -> Optional[str]:
         with self._lock:
             if self._process and self._process.poll() is None:
                 return "Already running."
@@ -305,10 +333,16 @@ class ProxyController:
             if not py:
                 return "No Python interpreter found."
 
+            proc_env = {
+                **os.environ,
+                "PYTHONUNBUFFERED": "1",
+                **(env_overrides or {}),
+            }
+
             self._enqueue(
-                f"\n──── started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ────\n"
+                f"──── {self.env.upper()} starting at "
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ────\n"
             )
-            self._enqueue(f"Using interpreter: {py}\n")
 
             try:
                 self._process = subprocess.Popen(
@@ -318,7 +352,7 @@ class ProxyController:
                     stderr=subprocess.STDOUT,
                     bufsize=1,
                     text=True,
-                    env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                    env=proc_env,
                 )
             except OSError as e:
                 return f"Failed to spawn: {e}"
@@ -339,11 +373,13 @@ class ProxyController:
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                self._enqueue("[controller] SIGTERM ignored — sending SIGKILL\n")
+                self._enqueue(
+                    f"[{self.env.upper()}] SIGTERM ignored — sending SIGKILL\n"
+                )
                 proc.kill()
                 proc.wait()
         except Exception as e:
-            self._enqueue(f"[controller] stop error: {e}\n")
+            self._enqueue(f"[{self.env.upper()}] stop error: {e}\n")
         self._set_state(self.STATE_STOPPED)
 
     def _read_loop(self) -> None:
@@ -352,12 +388,20 @@ class ProxyController:
             return
         try:
             for line in proc.stdout:
+                # main.py already inserts [LIVE] / [DEMO] via its log
+                # format, so we forward the line verbatim. For lines
+                # that DON'T come from the logger (rare: crashes,
+                # mitmproxy internals), we tag them ourselves so they
+                # don't appear unattributable in the merged Log tab.
+                tag = f"[{self.env.upper()}]"
+                if tag not in line:
+                    line = f"{tag} {line}"
                 self._enqueue(line)
                 if (self._state == self.STATE_STARTING
                         and self._RUNNING_MARKER.search(line)):
                     self._set_state(self.STATE_RUNNING)
         except Exception as e:
-            self._enqueue(f"[reader] {e}\n")
+            self._enqueue(f"[{self.env.upper()}] reader error: {e}\n")
         rc = proc.wait()
         with self._lock:
             still_ours = self._process is proc
@@ -365,7 +409,9 @@ class ProxyController:
             if rc in (0, -signal.SIGTERM):
                 self._set_state(self.STATE_STOPPED)
             else:
-                self._enqueue(f"[controller] process exited with rc={rc}\n")
+                self._enqueue(
+                    f"[{self.env.upper()}] process exited with rc={rc}\n"
+                )
                 self._set_state(self.STATE_ERROR)
             with self._lock:
                 self._process = None
@@ -407,16 +453,26 @@ class ProxyController:
 # ─────────────────────────────────────────────────────────────────────── #
 
 _STATE_COLOR = {
-    ProxyController.STATE_STOPPED:  "#9aa0a6",   # gray
-    ProxyController.STATE_STARTING: "#f9ab00",   # amber
-    ProxyController.STATE_RUNNING:  "#1e8e3e",   # green
-    ProxyController.STATE_ERROR:    "#d93025",   # red
+    ProxyController.STATE_STOPPED:  "#9aa0a6",
+    ProxyController.STATE_STARTING: "#f9ab00",
+    ProxyController.STATE_RUNNING:  "#1e8e3e",
+    ProxyController.STATE_ERROR:    "#d93025",
 }
 _STATE_LABEL = {
     ProxyController.STATE_STOPPED:  "Stopped",
     ProxyController.STATE_STARTING: "Starting…",
     ProxyController.STATE_RUNNING:  "Running",
     ProxyController.STATE_ERROR:    "Error",
+}
+
+# Log-line colours per env. Light-on-dark to keep readable against the
+# dark Log background.
+_ENV_LOG_COLOR = {
+    "live": "#ff8a80",   # soft red
+    "demo": "#82b1ff",   # soft blue
+}
+_ENV_TAG_RE = {
+    env: re.compile(r"\[" + env.upper() + r"\]") for env in ENVIRONMENTS
 }
 
 
@@ -432,34 +488,47 @@ class TradeSyncApp:
             env_path=project_root / ".env",
             template_path=project_root / ".env.example",
         )
-        self.log_q: queue.Queue[str] = queue.Queue(maxsize=20_000)
-        self.controller = ProxyController(project_root, self.log_q)
+        self.log_q: queue.Queue[str] = queue.Queue(maxsize=40_000)
+
+        # One ProxyController per environment.
+        self.controllers: dict[str, ProxyController] = {
+            env: ProxyController(env, project_root, self.log_q)
+            for env in ENVIRONMENTS
+        }
 
         self.root = tk.Tk()
         self.root.title("TradeSynchronizer")
-        self.root.geometry("780x640")
-        self.root.minsize(640, 520)
+        self.root.geometry("840x720")
+        self.root.minsize(720, 580)
 
-        self.widgets: dict[str, tk.Variable] = {}
+        # Widget storage:
+        #   general_widgets[key] → Variable      (General tab)
+        #   env_widgets[env][key] → Variable     (Live / Demo tabs)
+        self.general_widgets: dict[str, tk.Variable] = {}
+        self.env_widgets: dict[str, dict[str, tk.Variable]] = {
+            env: {} for env in ENVIRONMENTS
+        }
+        # Per-env UI state slots
+        self.engine_buttons: dict[str, tuple[ttk.Button, ttk.Button]] = {}
+        self.engine_status:  dict[str, tuple[tk.Canvas, int, ttk.Label]] = {}
+
         self._dirty = False
         self._saved_snapshot: tuple = self.store.snapshot()
-        # Tracks the env currently displayed in the form, used to detect
-        # the OLD env when the dropdown changes.
-        self._displayed_env: str = self.store.active_env
-        # When True, widget writes do NOT flow back into the store (used
-        # while we're repopulating the form programmatically).
         self._suppress_sync = False
 
         self._init_style()
         self._build_ui()
         self._load_settings()
 
-        self.controller.on_state_change(
-            lambda s: self.root.after(0, self._refresh_state, s)
-        )
+        for env, ctrl in self.controllers.items():
+            ctrl.on_state_change(
+                lambda s, _env=env:
+                    self.root.after(0, self._refresh_engine_state, _env, s)
+            )
+            self._refresh_engine_state(env, ctrl.state)
+
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(100, self._drain_log)
-        self._refresh_state(self.controller.state)
 
     # ── styling ────────────────────────────────────────────────────── #
 
@@ -472,8 +541,6 @@ class TradeSyncApp:
         style.configure("Section.TLabel", font=("Helvetica", 13, "bold"))
         style.configure("Help.TLabel", foreground="#5f6368")
         style.configure("Status.TLabel", font=("Helvetica", 13))
-        style.configure("EnvHint.TLabel",
-                        foreground="#1a73e8", font=("Helvetica", 11, "italic"))
 
     # ── layout ─────────────────────────────────────────────────────── #
 
@@ -481,37 +548,128 @@ class TradeSyncApp:
         outer = ttk.Frame(self.root, padding=12)
         outer.pack(fill="both", expand=True)
 
-        header = ttk.Frame(outer)
-        header.pack(fill="x", pady=(0, 12))
-        ttk.Label(header, text="TradeSynchronizer",
+        # Title row.
+        title_row = ttk.Frame(outer)
+        title_row.pack(fill="x", pady=(0, 8))
+        ttk.Label(title_row, text="TradeSynchronizer",
                   font=("Helvetica", 17, "bold")).pack(side="left")
-        self.start_btn = ttk.Button(header, text="Start", command=self._on_start)
-        self.stop_btn  = ttk.Button(header, text="Stop",  command=self._on_stop)
-        self.stop_btn.pack(side="right", padx=(6, 0))
-        self.start_btn.pack(side="right")
+        # Reload / Save in the same row, right-aligned.
+        self.save_btn = ttk.Button(title_row, text="Save",
+                                   command=self._save_settings)
+        self.reload_btn = ttk.Button(title_row, text="Reload",
+                                     command=self._load_settings)
+        self.save_btn.pack(side="right", padx=(6, 0))
+        self.reload_btn.pack(side="right")
 
-        status_row = ttk.Frame(outer)
-        status_row.pack(fill="x", pady=(0, 12))
-        self.status_dot = tk.Canvas(status_row, width=14, height=14,
-                                    highlightthickness=0,
-                                    bg=self.root.cget("bg"))
-        self.status_dot.pack(side="left")
-        self._dot = self.status_dot.create_oval(2, 2, 12, 12,
-                                                fill="#9aa0a6", outline="")
-        self.status_label = ttk.Label(status_row, text="Stopped",
-                                      style="Status.TLabel")
-        self.status_label.pack(side="left", padx=(8, 0))
+        # Engines row — two cards side by side.
+        engines = ttk.Frame(outer)
+        engines.pack(fill="x", pady=(4, 12))
+        for env in ENVIRONMENTS:
+            card = self._build_engine_card(engines, env)
+            card.pack(side="left", fill="both", expand=True,
+                      padx=(0, 6) if env == "live" else (6, 0))
 
-        notebook = ttk.Notebook(outer)
-        notebook.pack(fill="both", expand=True)
-        self.settings_tab = ttk.Frame(notebook)
-        self.log_tab = ttk.Frame(notebook)
-        notebook.add(self.settings_tab, text="Settings")
-        notebook.add(self.log_tab, text="Log")
-        self._build_settings_tab(self.settings_tab)
-        self._build_log_tab(self.log_tab)
+        # Tabs: General | Live | Demo | Log
+        self.notebook = ttk.Notebook(outer)
+        self.notebook.pack(fill="both", expand=True)
 
-    def _build_settings_tab(self, parent):
+        general_tab = ttk.Frame(self.notebook)
+        self.notebook.add(general_tab, text="General")
+        self._build_general_tab(general_tab)
+
+        self.env_tabs: dict[str, ttk.Frame] = {}
+        for env in ENVIRONMENTS:
+            tab = ttk.Frame(self.notebook)
+            self.notebook.add(tab, text=env.capitalize())
+            self.env_tabs[env] = tab
+            self._build_per_env_tab(tab, env)
+
+        log_tab = ttk.Frame(self.notebook)
+        self.notebook.add(log_tab, text="Log")
+        self._build_log_tab(log_tab)
+
+        # General is active by default per the spec.
+        self.notebook.select(general_tab)
+
+    def _build_engine_card(self, parent, env: str) -> ttk.LabelFrame:
+        card = ttk.LabelFrame(parent, text=f"{env.upper()} engine", padding=10)
+
+        status_row = ttk.Frame(card)
+        status_row.pack(fill="x")
+        dot = tk.Canvas(status_row, width=14, height=14,
+                        highlightthickness=0, bg=self.root.cget("bg"))
+        dot.pack(side="left")
+        dot_id = dot.create_oval(2, 2, 12, 12, fill="#9aa0a6", outline="")
+        label = ttk.Label(status_row, text="Stopped", style="Status.TLabel")
+        label.pack(side="left", padx=(8, 0))
+        self.engine_status[env] = (dot, dot_id, label)
+
+        btns = ttk.Frame(card)
+        btns.pack(fill="x", pady=(8, 0))
+        start_btn = ttk.Button(btns, text="Start",
+                               command=lambda e=env: self._on_start(e))
+        stop_btn = ttk.Button(btns, text="Stop",
+                              command=lambda e=env: self._on_stop(e))
+        start_btn.pack(side="left", fill="x", expand=True)
+        stop_btn.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        self.engine_buttons[env] = (start_btn, stop_btn)
+
+        return card
+
+    def _build_general_tab(self, parent):
+        self._render_fields(parent, GENERAL_FIELDS, env=None)
+
+    def _build_per_env_tab(self, parent, env: str):
+        self._render_fields(parent, PER_ENV_FIELDS, env=env)
+
+    def _build_log_tab(self, parent):
+        toolbar = ttk.Frame(parent)
+        toolbar.pack(fill="x", padx=8, pady=(8, 4))
+        self.auto_scroll = tk.BooleanVar(value=True)
+        ttk.Checkbutton(toolbar, text="Auto-scroll",
+                        variable=self.auto_scroll).pack(side="left")
+        ttk.Label(toolbar, text=" • ", foreground="#5f6368").pack(side="left")
+        for env in ENVIRONMENTS:
+            sw = tk.Canvas(toolbar, width=10, height=10,
+                           highlightthickness=0, bg=self.root.cget("bg"))
+            sw.create_oval(0, 0, 10, 10, fill=_ENV_LOG_COLOR[env], outline="")
+            sw.pack(side="left", padx=(4, 2))
+            ttk.Label(toolbar, text=env.upper(),
+                      foreground=_ENV_LOG_COLOR[env]).pack(side="left",
+                                                            padx=(0, 8))
+        ttk.Button(toolbar, text="Clear",
+                   command=self._clear_log).pack(side="right")
+
+        text_frame = ttk.Frame(parent)
+        text_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
+        font_mono = tkfont.nametofont("TkFixedFont").copy()
+        font_mono.configure(size=11)
+        self.log_text = tk.Text(text_frame, wrap="none", state="disabled",
+                                font=font_mono, bg="#1e1e1e", fg="#e6e6e6",
+                                insertbackground="#e6e6e6",
+                                relief="flat", borderwidth=0)
+        for env in ENVIRONMENTS:
+            self.log_text.tag_configure(f"env-{env}",
+                                        foreground=_ENV_LOG_COLOR[env])
+
+        vsb = ttk.Scrollbar(text_frame, orient="vertical",
+                            command=self.log_text.yview)
+        hsb = ttk.Scrollbar(text_frame, orient="horizontal",
+                            command=self.log_text.xview)
+        self.log_text.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.log_text.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        text_frame.rowconfigure(0, weight=1)
+        text_frame.columnconfigure(0, weight=1)
+
+    def _render_fields(self, parent, fields, env: Optional[str]):
+        """
+        Build a scrollable form for either General (env=None) or one of
+        the per-env tabs (env='live' / 'demo'). Widget references go
+        into the appropriate dict: general_widgets or env_widgets[env].
+        """
         canvas = tk.Canvas(parent, highlightthickness=0)
         sb = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=sb.set)
@@ -525,11 +683,12 @@ class TradeSyncApp:
         canvas.bind("<Configure>",
                     lambda e: canvas.itemconfigure(inner_id, width=e.width))
         canvas.bind_all("<MouseWheel>",
-                        lambda e: canvas.yview_scroll(int(-1 * (e.delta / 2)), "units"))
+                        lambda e: canvas.yview_scroll(
+                            int(-1 * (e.delta / 2)), "units"))
 
         inner.columnconfigure(1, weight=1)
         row = 0
-        for key, label, kind, default, opts in _FIELDS:
+        for key, label, kind, default, opts in fields:
             if kind == "section":
                 if row > 0:
                     ttk.Separator(inner, orient="horizontal").grid(
@@ -544,111 +703,61 @@ class TradeSyncApp:
             ttk.Label(inner, text=label + ":").grid(
                 row=row, column=0, sticky="w", padx=(0, 12), pady=4)
 
+            # Per-env default override (e.g. PROXY_LISTEN_PORT).
+            actual_default = default
+            if env and key in PER_ENV_DEFAULTS:
+                actual_default = PER_ENV_DEFAULTS[key].get(env, default) or ""
+
             if kind == "bool":
                 var: tk.Variable = tk.BooleanVar(
-                    value=str(default).lower() == "true")
+                    value=str(actual_default).lower() == "true")
                 w = ttk.Checkbutton(inner, variable=var,
                                     command=self._on_widget_change)
                 w.grid(row=row, column=1, sticky="w", pady=4)
             elif kind == "choice":
-                var = tk.StringVar(value=default)
+                var = tk.StringVar(value=actual_default)
                 w = ttk.Combobox(inner, textvariable=var, values=opts,
                                  state="readonly", width=14)
                 w.grid(row=row, column=1, sticky="w", pady=4)
-                # Special: the Environment dropdown swaps the form contents
-                # for per-env fields when it changes.
-                if key == "TRADOVATE_ENVIRONMENT":
-                    w.bind("<<ComboboxSelected>>",
-                           lambda _e: self._on_env_change())
-                else:
-                    w.bind("<<ComboboxSelected>>",
-                           lambda _e: self._on_widget_change())
+                w.bind("<<ComboboxSelected>>",
+                       lambda _e: self._on_widget_change())
             elif kind == "password":
-                var = tk.StringVar(value=default)
+                var = tk.StringVar(value=actual_default)
                 w = ttk.Entry(inner, textvariable=var, show="•")
                 w.grid(row=row, column=1, sticky="ew", pady=4)
                 var.trace_add("write", lambda *_a: self._on_widget_change())
             else:
-                var = tk.StringVar(value=default)
+                var = tk.StringVar(value=actual_default)
                 w = ttk.Entry(inner, textvariable=var)
                 w.grid(row=row, column=1, sticky="ew", pady=4)
                 var.trace_add("write", lambda *_a: self._on_widget_change())
 
-            self.widgets[key] = var
+            if env is None:
+                self.general_widgets[key] = var
+            else:
+                self.env_widgets[env][key] = var
             row += 1
-
-            # Hint right under the Environment dropdown so the user
-            # knows the credentials below depend on it.
-            if key == "TRADOVATE_ENVIRONMENT":
-                self.env_hint = ttk.Label(
-                    inner, text="", style="EnvHint.TLabel",
-                )
-                self.env_hint.grid(row=row, column=1, sticky="w", pady=(0, 4))
-                row += 1
 
             help_text = opts if isinstance(opts, str) else None
             if help_text:
                 ttk.Label(inner, text="↪ " + help_text,
-                          style="Help.TLabel").grid(
+                          style="Help.TLabel",
+                          wraplength=540, justify="left").grid(
                     row=row, column=1, sticky="w", pady=(0, 4))
                 row += 1
-
-        ttk.Separator(inner, orient="horizontal").grid(
-            row=row, column=0, columnspan=2, sticky="ew", pady=(14, 10))
-        row += 1
-        btn_row = ttk.Frame(inner)
-        btn_row.grid(row=row, column=0, columnspan=2, sticky="e")
-        self.reload_btn = ttk.Button(btn_row, text="Reload",
-                                     command=self._load_settings)
-        self.save_btn = ttk.Button(btn_row, text="Save",
-                                   command=self._save_settings)
-        self.reload_btn.pack(side="left", padx=(0, 8))
-        self.save_btn.pack(side="left")
-
-    def _build_log_tab(self, parent):
-        toolbar = ttk.Frame(parent)
-        toolbar.pack(fill="x", padx=8, pady=(8, 4))
-        self.auto_scroll = tk.BooleanVar(value=True)
-        ttk.Checkbutton(toolbar, text="Auto-scroll",
-                        variable=self.auto_scroll).pack(side="left")
-        ttk.Button(toolbar, text="Clear",
-                   command=self._clear_log).pack(side="right")
-
-        text_frame = ttk.Frame(parent)
-        text_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-
-        font_mono = tkfont.nametofont("TkFixedFont").copy()
-        font_mono.configure(size=11)
-        self.log_text = tk.Text(text_frame, wrap="none", state="disabled",
-                                font=font_mono, bg="#1e1e1e", fg="#e6e6e6",
-                                insertbackground="#e6e6e6",
-                                relief="flat", borderwidth=0)
-        vsb = ttk.Scrollbar(text_frame, orient="vertical",
-                            command=self.log_text.yview)
-        hsb = ttk.Scrollbar(text_frame, orient="horizontal",
-                            command=self.log_text.xview)
-        self.log_text.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-        self.log_text.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        hsb.grid(row=1, column=0, sticky="ew")
-        text_frame.rowconfigure(0, weight=1)
-        text_frame.columnconfigure(0, weight=1)
 
     # ── settings I/O ──────────────────────────────────────────────── #
 
     def _load_settings(self):
         self.store.load()
-        self._displayed_env = self.store.active_env
         self._populate_form_from_store()
         self._saved_snapshot = self.store.snapshot()
         self._dirty = False
         self._refresh_save_button()
-        self._refresh_env_hint()
 
     def _save_settings(self):
-        # Flush any pending widget edits into the store first.
         self._flush_widgets_to_store()
-        err = self._validate()
+        err = self._validate_all()
         if err:
             messagebox.showerror("Invalid settings", err)
             return
@@ -661,56 +770,77 @@ class TradeSyncApp:
         self._saved_snapshot = self.store.snapshot()
         self._dirty = False
         self._refresh_save_button()
-        self._append_log(
-            f"⚙️  Saved {self.store.env_path}  "
-            f"(active={self.store.active_env})\n"
-        )
+        self._append_log(f"⚙️  Saved {self.store.env_path}\n")
 
-    def _validate(self) -> Optional[str]:
-        """Validate only the ACTIVE environment's required credentials."""
-        active = self.store.active_env
+    def _validate_all(self) -> Optional[str]:
+        """
+        Validate every field that can be sanity-checked without
+        contacting a remote (missing required, bad port range, bad
+        port collision). Credential emptiness is allowed if that env's
+        engine is never started; it'll surface as a more specific
+        error in _validate_env when the user actually clicks Start.
+        """
+        port_seen: dict[str, int] = {}
+        for env in ENVIRONMENTS:
+            port_raw = self.store.per_env[env].get(
+                "PROXY_LISTEN_PORT",
+                PER_ENV_DEFAULTS["PROXY_LISTEN_PORT"][env],
+            )
+            try:
+                p = int(port_raw)
+                if not (1 <= p <= 65535):
+                    raise ValueError
+            except ValueError:
+                return (f"{env.upper()}: listen port must be "
+                        f"an integer 1-65535, got '{port_raw}'.")
+            if p in port_seen:
+                return (f"Port {p} is configured for both "
+                        f"{port_seen[p].upper()} and {env.upper()} engines. "
+                        f"Use distinct ports.")
+            port_seen[p] = env
+        return None
+
+    def _validate_env(self, env: str) -> Optional[str]:
+        """Tighter validation, run before starting a specific engine."""
         required = ["TRADOVATE_USERNAME", "TRADOVATE_PASSWORD",
                     "TRADOVATE_CID", "TRADOVATE_SEC"]
         missing = [k for k in required
-                   if not self.store.per_env[active].get(k)]
+                   if not self.store.per_env[env].get(k)]
         if missing:
-            return (f"Missing required for {active.upper()}: "
-                    + ", ".join(missing))
-        port = self.store.shared.get("PROXY_LISTEN_PORT", "")
-        try:
-            p = int(port)
-            if not (1 <= p <= 65535):
-                raise ValueError
-        except ValueError:
-            return f"PROXY_LISTEN_PORT must be 1-65535, got '{port}'."
-        return None
+            return (f"{env.upper()} engine cannot start — missing: "
+                    + ", ".join(missing) +
+                    f". Fill them in the '{env.capitalize()}' tab.")
+        return self._validate_all()
 
     # ── store ↔ widgets sync ──────────────────────────────────────── #
 
     def _populate_form_from_store(self):
-        """
-        Copy every stored value (active env for per_env fields) into
-        the corresponding widget. Widget writes are suppressed so we
-        don't loop back through _on_widget_change and re-dirty.
-        """
         self._suppress_sync = True
         try:
-            for key, var in self.widgets.items():
-                value = self.store.get(key)
+            for key, var in self.general_widgets.items():
+                value = self.store.shared.get(key, "")
                 if not value:
-                    # Fall back to the field default so the form isn't
-                    # blank for things like APP_ID where the default
-                    # is meaningful.
-                    field = next((f for f in _FIELDS if f[0] == key), None)
+                    field = next((f for f in GENERAL_FIELDS if f[0] == key), None)
                     if field:
                         value = field[3] or ""
-                self._set_widget_value(key, value)
+                self._set_var(var, key, value, fields=GENERAL_FIELDS)
+            for env in ENVIRONMENTS:
+                for key, var in self.env_widgets[env].items():
+                    value = self.store.per_env[env].get(key, "")
+                    if not value:
+                        if key in PER_ENV_DEFAULTS:
+                            value = PER_ENV_DEFAULTS[key].get(env, "")
+                        if not value:
+                            field = next((f for f in PER_ENV_FIELDS
+                                         if f[0] == key), None)
+                            if field:
+                                value = field[3] or ""
+                    self._set_var(var, key, value, fields=PER_ENV_FIELDS)
         finally:
             self._suppress_sync = False
 
-    def _set_widget_value(self, key: str, value: str):
-        var = self.widgets[key]
-        field = next((f for f in _FIELDS if f[0] == key), None)
+    def _set_var(self, var: tk.Variable, key: str, value: str, *, fields):
+        field = next((f for f in fields if f[0] == key), None)
         kind = field[2] if field else "text"
         if kind == "bool":
             var.set(str(value).strip().lower() in ("1", "true", "yes", "on"))
@@ -718,12 +848,17 @@ class TradeSyncApp:
             var.set(value)
 
     def _flush_widgets_to_store(self):
-        """Copy every widget value into the store under the active env."""
-        for key, var in self.widgets.items():
+        for key, var in self.general_widgets.items():
             v = var.get()
             value = ("true" if v else "false") if isinstance(v, bool) \
                 else str(v).strip()
-            self.store.set(key, value)
+            self.store.shared[key] = value
+        for env in ENVIRONMENTS:
+            for key, var in self.env_widgets[env].items():
+                v = var.get()
+                value = ("true" if v else "false") if isinstance(v, bool) \
+                    else str(v).strip()
+                self.store.per_env[env][key] = value
 
     # ── widget callbacks ──────────────────────────────────────────── #
 
@@ -736,66 +871,17 @@ class TradeSyncApp:
             self._dirty = is_dirty
             self._refresh_save_button()
 
-    def _on_env_change(self):
-        """
-        Triggered when the Environment combobox changes. Saves the
-        currently displayed per-env values into the OLD environment's
-        bucket, activates the NEW environment in the store, and
-        repopulates the form from there. The other (non per-env)
-        fields stay put.
-        """
-        new_env = self.widgets["TRADOVATE_ENVIRONMENT"].get().lower()
-        if new_env not in ENVIRONMENTS or new_env == self._displayed_env:
-            return
-
-        old_env = self._displayed_env
-
-        # 1. Snapshot the per_env widgets into the OLD env in the store.
-        for key in PER_ENV_KEYS:
-            if key not in self.widgets:
-                continue
-            v = self.widgets[key].get()
-            value = ("true" if v else "false") if isinstance(v, bool) \
-                else str(v).strip()
-            self.store.per_env[old_env][key] = value
-
-        # 2. Activate the new env.
-        self.store.active_env = new_env
-        self._displayed_env = new_env
-
-        # 3. Repopulate per_env widgets from the NEW env.
-        self._suppress_sync = True
-        try:
-            for key in PER_ENV_KEYS:
-                if key in self.widgets:
-                    self._set_widget_value(key, self.store.get(key))
-        finally:
-            self._suppress_sync = False
-
-        # 4. Refresh dirty state and UI hint.
-        is_dirty = self.store.snapshot() != self._saved_snapshot
-        if is_dirty != self._dirty:
-            self._dirty = is_dirty
-            self._refresh_save_button()
-        self._refresh_env_hint()
-        self._append_log(
-            f"🔀 Form switched: {old_env.upper()} → {new_env.upper()} "
-            f"(credentials swapped, other settings unchanged)\n"
-        )
-
-    def _refresh_env_hint(self):
-        if hasattr(self, "env_hint"):
-            self.env_hint.configure(
-                text=f"↳ credentials below apply to the "
-                     f"{self.store.active_env.upper()} environment"
-            )
-
     def _refresh_save_button(self):
         self.save_btn.configure(text="Save *" if self._dirty else "Save")
 
     # ── controller events ─────────────────────────────────────────── #
 
-    def _on_start(self):
+    def _on_start(self, env: str):
+        self._flush_widgets_to_store()
+        err = self._validate_env(env)
+        if err:
+            messagebox.showerror("Cannot start", err)
+            return
         if self._dirty:
             if not messagebox.askyesno(
                 "Unsaved changes",
@@ -805,20 +891,35 @@ class TradeSyncApp:
             self._save_settings()
             if self._dirty:
                 return
-        err = self.controller.start()
+
+        port = self.store.per_env[env].get(
+            "PROXY_LISTEN_PORT",
+            PER_ENV_DEFAULTS["PROXY_LISTEN_PORT"][env],
+        )
+        env_overrides = {
+            "TRADOVATE_ENVIRONMENT": env,
+            "PROXY_LISTEN_PORT": port,
+        }
+        err = self.controllers[env].start(env_overrides=env_overrides)
         if err:
-            messagebox.showerror("Cannot start", err)
+            messagebox.showerror(f"Cannot start {env.upper()}", err)
 
-    def _on_stop(self):
-        self.controller.stop()
+    def _on_stop(self, env: str):
+        self.controllers[env].stop()
 
-    def _refresh_state(self, state: str):
-        self.status_dot.itemconfigure(self._dot, fill=_STATE_COLOR[state])
-        self.status_label.configure(text=_STATE_LABEL[state])
+    def _refresh_engine_state(self, env: str, state: str):
+        dot, dot_id, label = self.engine_status[env]
+        dot.itemconfigure(dot_id, fill=_STATE_COLOR[state])
+        port = self.store.per_env[env].get(
+            "PROXY_LISTEN_PORT",
+            PER_ENV_DEFAULTS["PROXY_LISTEN_PORT"][env],
+        )
+        label.configure(text=f"{_STATE_LABEL[state]}  :{port}")
+        start_btn, stop_btn = self.engine_buttons[env]
         is_running = state in (ProxyController.STATE_STARTING,
                                ProxyController.STATE_RUNNING)
-        self.start_btn.configure(state="disabled" if is_running else "normal")
-        self.stop_btn.configure(state="normal" if is_running else "disabled")
+        start_btn.configure(state="disabled" if is_running else "normal")
+        stop_btn.configure(state="normal" if is_running else "disabled")
 
     # ── log streaming ─────────────────────────────────────────────── #
 
@@ -835,7 +936,14 @@ class TradeSyncApp:
 
     def _append_log(self, line: str):
         self.log_text.configure(state="normal")
+        start = self.log_text.index("end-1c")
         self.log_text.insert("end", line)
+        end = self.log_text.index("end-1c")
+        # Tint the line based on which env's tag appears in it.
+        for env, pat in _ENV_TAG_RE.items():
+            if pat.search(line):
+                self.log_text.tag_add(f"env-{env}", start, end)
+                break
         if self.auto_scroll.get():
             self.log_text.see("end")
         self.log_text.configure(state="disabled")
@@ -847,15 +955,22 @@ class TradeSyncApp:
 
     # ── lifecycle ─────────────────────────────────────────────────── #
 
+    def _any_engine_running(self) -> bool:
+        return any(
+            c.state in (ProxyController.STATE_STARTING,
+                        ProxyController.STATE_RUNNING)
+            for c in self.controllers.values()
+        )
+
     def _on_close(self):
-        if self.controller.state in (ProxyController.STATE_STARTING,
-                                     ProxyController.STATE_RUNNING):
+        if self._any_engine_running():
             if not messagebox.askyesno(
-                "Proxy is running",
-                "The proxy is currently running. Stop it and quit?",
+                "Engines running",
+                "One or more engines are running. Stop them and quit?",
             ):
                 return
-        self.controller.stop()
+        for c in self.controllers.values():
+            c.stop()
         self.root.destroy()
 
     def run(self):

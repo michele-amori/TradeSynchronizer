@@ -115,6 +115,20 @@ class Config:
         watched_raw = per_env("IBKR_WATCHED_ACCOUNTS").strip()
         watched = [a.strip() for a in watched_raw.split(",") if a.strip()]
 
+        # Proxy listen port is per-env (two engines must bind two ports).
+        # The GUI also passes an explicit PROXY_LISTEN_PORT override via
+        # subprocess env var; that wins because os.getenv is read after
+        # load_dotenv and load_dotenv doesn't overwrite existing vars.
+        port_raw = (per_env("PROXY_LISTEN_PORT")
+                    or ("8080" if env == "live" else "8081"))
+        try:
+            proxy_port = int(port_raw)
+        except ValueError:
+            raise RuntimeError(
+                f"PROXY_LISTEN_PORT for {env.upper()} must be an integer, "
+                f"got '{port_raw}'"
+            )
+
         return cls(
             tradovate_username=required["TRADOVATE_USERNAME"],
             tradovate_password=required["TRADOVATE_PASSWORD"],
@@ -125,7 +139,7 @@ class Config:
             tradovate_env=env,
             tradovate_acct_id=acct_id,
             proxy_host=os.getenv("PROXY_LISTEN_HOST") or "127.0.0.1",
-            proxy_port=int(os.getenv("PROXY_LISTEN_PORT") or "8080"),
+            proxy_port=proxy_port,
             replication_mode=replication_mode,
             skip_protective_stops=skip_stops,
             ibkr_watched_accounts=watched,

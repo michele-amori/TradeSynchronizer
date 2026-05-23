@@ -67,19 +67,22 @@ class TestEnvStoreLoad(unittest.TestCase):
             "IBKR_WATCHED_ACCOUNTS=U7713037\n"
             "TRADOVATE_APP_ID=TradeSynchronizer\n"
             "PROXY_LISTEN_PORT=8080\n"
+            "PROXY_LISTEN_HOST=127.0.0.1\n"
         )
         with _TmpEnv(env_text=legacy) as s:
             s.load()
             self.assertEqual(s.active_env, "live")
-            # Per-env values land in the active env
+            # Per-env values land in the active env. PROXY_LISTEN_PORT
+            # is now per-env too, so legacy 8080 also migrates here.
             self.assertEqual(s.per_env["live"]["TRADOVATE_USERNAME"], "u_live")
             self.assertEqual(s.per_env["live"]["IBKR_WATCHED_ACCOUNTS"], "U7713037")
             self.assertEqual(s.per_env["live"]["TRADOVATE_ACCOUNT_ID"], "1290252")
+            self.assertEqual(s.per_env["live"]["PROXY_LISTEN_PORT"], "8080")
             # The other env is empty (no demo data in legacy file)
             self.assertEqual(s.per_env["demo"], {})
-            # Shared is unaffected
+            # Truly shared things land in shared
             self.assertEqual(s.shared["TRADOVATE_APP_ID"], "TradeSynchronizer")
-            self.assertEqual(s.shared["PROXY_LISTEN_PORT"], "8080")
+            self.assertEqual(s.shared["PROXY_LISTEN_HOST"], "127.0.0.1")
 
     def test_load_new_format(self):
         new_format = (
@@ -156,10 +159,11 @@ class TestEnvStoreGetSet(unittest.TestCase):
     def test_shared_key_not_per_env(self):
         with _TmpEnv(env_text="") as s:
             s.load()
-            s.set("PROXY_LISTEN_PORT", "9000")
-            self.assertEqual(s.shared["PROXY_LISTEN_PORT"], "9000")
-            self.assertNotIn("PROXY_LISTEN_PORT", s.per_env["live"])
-            self.assertNotIn("PROXY_LISTEN_PORT", s.per_env["demo"])
+            # PROXY_LISTEN_HOST is shared; PROXY_LISTEN_PORT is per-env.
+            s.set("PROXY_LISTEN_HOST", "0.0.0.0")
+            self.assertEqual(s.shared["PROXY_LISTEN_HOST"], "0.0.0.0")
+            self.assertNotIn("PROXY_LISTEN_HOST", s.per_env["live"])
+            self.assertNotIn("PROXY_LISTEN_HOST", s.per_env["demo"])
 
 
 class TestEnvStoreWrite(unittest.TestCase):
@@ -175,6 +179,7 @@ class TestEnvStoreWrite(unittest.TestCase):
                 "TRADOVATE_SEC": "sec_live",
                 "TRADOVATE_ACCOUNT_ID": "1290252",
                 "IBKR_WATCHED_ACCOUNTS": "U7713037",
+                "PROXY_LISTEN_PORT": "8080",
             }
             s.per_env["demo"] = {
                 "TRADOVATE_USERNAME": "u_demo",
@@ -183,12 +188,12 @@ class TestEnvStoreWrite(unittest.TestCase):
                 "TRADOVATE_SEC": "sec_demo",
                 "TRADOVATE_ACCOUNT_ID": "",
                 "IBKR_WATCHED_ACCOUNTS": "DU9999999",
+                "PROXY_LISTEN_PORT": "8081",
             }
             s.shared.update({
                 "TRADOVATE_APP_ID": "TradeSynchronizer",
                 "TRADOVATE_APP_VERSION": "1.0",
                 "PROXY_LISTEN_HOST": "127.0.0.1",
-                "PROXY_LISTEN_PORT": "8080",
                 "REPLICATION_MODE": "mirror",
                 "SKIP_PROTECTIVE_STOPS": "true",
                 "LOG_LEVEL": "INFO",
@@ -204,6 +209,8 @@ class TestEnvStoreWrite(unittest.TestCase):
             self.assertEqual(s2.per_env["demo"]["TRADOVATE_USERNAME"], "u_demo")
             self.assertEqual(s2.per_env["live"]["IBKR_WATCHED_ACCOUNTS"], "U7713037")
             self.assertEqual(s2.per_env["demo"]["IBKR_WATCHED_ACCOUNTS"], "DU9999999")
+            self.assertEqual(s2.per_env["live"]["PROXY_LISTEN_PORT"], "8080")
+            self.assertEqual(s2.per_env["demo"]["PROXY_LISTEN_PORT"], "8081")
             self.assertEqual(s2.shared["PROXY_LISTEN_HOST"], "127.0.0.1")
             self.assertEqual(s2.shared["REPLICATION_MODE"], "mirror")
 
@@ -246,11 +253,15 @@ class TestEnvStoreWrite(unittest.TestCase):
             s2.load()
             self.assertEqual(s2.per_env["live"]["TRADOVATE_USERNAME"], "amoreyda1977")
             self.assertEqual(s2.per_env["live"]["IBKR_WATCHED_ACCOUNTS"], "U7713037")
-            # Demo keys are emitted with empty strings on write, which is
-            # how they come back on reload. get('') is equivalent to
-            # missing for UI purposes.
+            # Demo credentials are emitted with empty strings on write
+            # (and come back empty on reload). PROXY_LISTEN_PORT is an
+            # exception: write() emits its per-env default (8081 for
+            # demo) so the user has a working port out of the box.
+            from tradesync.ui.app import PER_ENV_DEFAULTS
             for k in PER_ENV_KEYS:
-                self.assertEqual(s2.per_env["demo"].get(k, ""), "")
+                expected = PER_ENV_DEFAULTS.get(k, {}).get("demo", "")
+                self.assertEqual(s2.per_env["demo"].get(k, ""), expected,
+                                 f"Unexpected demo value for {k}")
 
 
 class TestSnapshot(unittest.TestCase):
