@@ -61,29 +61,46 @@ class Config:
 
     @classmethod
     def load(cls) -> "Config":
-        """Read .env, validate required fields, return a Config."""
-        load_dotenv(_ENV_FILE)
+        """
+        Read .env, validate required fields, return a Config.
 
-        required = {
-            "TRADOVATE_USERNAME":  os.getenv("TRADOVATE_USERNAME"),
-            "TRADOVATE_PASSWORD":  os.getenv("TRADOVATE_PASSWORD"),
-            "TRADOVATE_CID":       os.getenv("TRADOVATE_CID"),
-            "TRADOVATE_SEC":       os.getenv("TRADOVATE_SEC"),
-        }
-        missing = [k for k, v in required.items() if not v]
-        if missing:
-            raise RuntimeError(
-                "Missing required env var(s): " + ", ".join(missing) +
-                f". Copy .env.example to .env (at {_ENV_FILE}) and fill them in."
-            )
+        Per-environment credentials (USERNAME/PASSWORD/CID/SEC/ACCOUNT_ID
+        and IBKR_WATCHED_ACCOUNTS) are read from the suffixed key
+        first — e.g. `TRADOVATE_USERNAME_LIVE` when env=live — then
+        fall back to the un-suffixed legacy key for backward compat
+        with .env files written before the demo/live split.
+        """
+        load_dotenv(_ENV_FILE)
 
         env = (os.getenv("TRADOVATE_ENVIRONMENT") or "demo").lower()
         if env not in _TRADOVATE_BASE:
             raise RuntimeError(
                 f"TRADOVATE_ENVIRONMENT must be 'demo' or 'live', got '{env}'"
             )
+        suffix = "_" + env.upper()
 
-        acct_id_raw = (os.getenv("TRADOVATE_ACCOUNT_ID") or "").strip()
+        def per_env(key: str) -> str:
+            """Suffixed key first, then un-suffixed legacy fallback."""
+            return (os.getenv(key + suffix)
+                    or os.getenv(key)
+                    or "")
+
+        required = {
+            "TRADOVATE_USERNAME": per_env("TRADOVATE_USERNAME"),
+            "TRADOVATE_PASSWORD": per_env("TRADOVATE_PASSWORD"),
+            "TRADOVATE_CID":      per_env("TRADOVATE_CID"),
+            "TRADOVATE_SEC":      per_env("TRADOVATE_SEC"),
+        }
+        missing = [k for k, v in required.items() if not v]
+        if missing:
+            raise RuntimeError(
+                f"Missing required {env.upper()} credential(s): "
+                + ", ".join(missing) +
+                f". Open TradeSynchronizer.app or edit {_ENV_FILE} "
+                f"and fill the *_{env.upper()} fields."
+            )
+
+        acct_id_raw = per_env("TRADOVATE_ACCOUNT_ID").strip()
         acct_id = int(acct_id_raw) if acct_id_raw else None
 
         replication_mode = (os.getenv("REPLICATION_MODE") or "mirror").lower()
@@ -95,7 +112,7 @@ class Config:
         skip_stops_raw = (os.getenv("SKIP_PROTECTIVE_STOPS") or "true").lower()
         skip_stops = skip_stops_raw in ("1", "true", "yes", "on")
 
-        watched_raw = (os.getenv("IBKR_WATCHED_ACCOUNTS") or "").strip()
+        watched_raw = per_env("IBKR_WATCHED_ACCOUNTS").strip()
         watched = [a.strip() for a in watched_raw.split(",") if a.strip()]
 
         return cls(
