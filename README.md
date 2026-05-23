@@ -225,12 +225,36 @@ The first three keys live in `.env` (shared by both engines);
 | TradingView doesn't go through the proxy | Quit TradingView completely, then relaunch with `open -a TradingView --args --proxy-server=127.0.0.1:8080`. Chromium-based apps only read the flag at launch. |
 | `SSL: CERTIFICATE_VERIFY_FAILED` from TradingView | Re-run the keychain trust step from §3 of *One-time setup*. |
 
+## Order lifecycle: cancellations & modifications
+
+TradeSynchronizer mirrors the full lifecycle of an IBKR order, not
+just placement:
+
+  * `POST   /orders`                  → places a new replica on Tradovate
+  * `DELETE /orders/{ibkr_order_id}`  → cancels the replica
+  * `POST/PUT /orders/{ibkr_order_id}` → modifies the replica
+    (new price, stop, quantity, or TIF)
+
+To make this possible the addon captures the IBKR-assigned
+`order_id` from each new-order POST response and stores the
+mapping `cOID ↔ IBKR id ↔ Tradovate orderId` in a small JSON file
+(per environment):
+
+```
+.tradesync-state/orders-live.json
+.tradesync-state/orders-demo.json
+```
+
+The file is gitignored and written atomically (tempfile + rename),
+so it survives a TradeSynchronizer restart while orders are still
+open. Successful cancels delete their entry; `OrderNotFound` from
+Tradovate (the order already filled or was cancelled out-of-band)
+is logged as a skip and the map entry is tidied up.
+
 ## What it does NOT do
 
 - **Does not place orders directly on prop-firm accounts**. That's
   TradeSyncer's job; this tool only feeds its LEADER account.
-- **Does not modify or cancel existing IBKR orders**. Only fresh
-  POSTs to `/orders` are observed; PUT/PATCH/DELETE are ignored.
 - **Does not replicate bracket/OCO legs**. If a future build needs
   them, see `mytradingguardMacOs/proxy/addon.py` for the
   multi-leg pattern.

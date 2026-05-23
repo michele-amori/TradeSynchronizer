@@ -1,21 +1,25 @@
 """
-Replicator — translates an intercepted IBKR order into the
-corresponding Tradovate placeorder call.
+Replicator — translates intercepted IBKR order events (new orders,
+cancellations, modifications) into the corresponding Tradovate
+calls.
 
-Single-responsibility: takes a parsed `IbkrOrder`, applies the
-replication policy (mirror vs always-market, skip protective stops),
-maps the symbol and order type, then asks the TradovateClient to
-submit it.
+Single-responsibility: takes a parsed `IbkrOrder` / `IbkrOrderCancel`
+/ `IbkrOrderModify`, applies replication policy, dispatches to
+`TradovateClient`, and maintains the persistent `OrderMap` that
+links IBKR ids to Tradovate ids across new-order responses,
+cancellations and modifications.
 
-Errors are caught and logged but never propagate back to the proxy
-hook — a failed Tradovate replication must not affect the original
-IBKR order, which has already gone through.
+Errors are caught and converted into `ReplicationResult` objects;
+they never propagate back to the proxy hook — a failed Tradovate
+call must not affect the original IBKR order, which has already
+gone through.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from .brokers.ibkr import IbkrContractResolver, ContractResolutionError
@@ -23,9 +27,11 @@ from .brokers.tradovate import (
     PlacedOrder,
     TradovateClient,
     TradovateOrderError,
+    TradovateOrderNotFound,
 )
 from .config import Config
-from .proxy.ibkr_parser import IbkrOrder
+from .order_map import OrderMap, default_store_path
+from .proxy.ibkr_parser import IbkrOrder, IbkrOrderCancel, IbkrOrderModify
 from .symbols.converter import convert_to_tradovate_format
 
 
@@ -72,17 +78,38 @@ class Replicator:
         cfg: Config,
         tradovate: TradovateClient,
         resolver: IbkrContractResolver,
+        order_map: Optional[OrderMap] = None,
     ):
         self._cfg = cfg
         self._tradovate = tradovate
         self._resolver = resolver
+        # In production the bootstrap creates a per-env persistent
+        # OrderMap; tests pass an in-memory or scratch-path version.
+        if order_map is None:
+            from .config import PROJECT_ROOT
+            order_map = OrderMap(
+                default_store_path(PROJECT_ROOT, cfg.tradovate_env)
+            )
+        self._order_map = order_map
 
-    def replicate(self, ibkr_order: IbkrOrder) -> ReplicationResult:
+    @property
+    def order_map(self) -> OrderMap:
+        return self._order_map
+
+    # ================================================================== #
+    #  New-order replication                                              #
+    # ================================================================== #
+
+    def replicate_new(self, ibkr_order: IbkrOrder) -> ReplicationResult:
         """
-        Apply policy, map fields, and submit the order. Never raises.
+        Apply policy, map fields, submit the order to Tradovate,
+        and register the cOID → Tradovate orderId mapping so a later
+        cancel/modify on this IBKR order can be replicated too.
+
+        Never raises.
         """
         try:
-            return self._replicate_inner(ibkr_order)
+            return self._replicate_new_inner(ibkr_order)
         except Exception as e:
             logger.exception("Unexpected replicator failure: %s", e)
             return ReplicationResult(
@@ -90,11 +117,10 @@ class Replicator:
                 reason=f"Internal error: {e}",
             )
 
-    # ------------------------------------------------------------------ #
-    #  Implementation                                                     #
-    # ------------------------------------------------------------------ #
+    # Back-compat alias for callers that still use the old name.
+    replicate = replicate_new
 
-    def _replicate_inner(self, ibkr_order: IbkrOrder) -> ReplicationResult:
+    def _replicate_new_inner(self, ibkr_order: IbkrOrder) -> ReplicationResult:
         # ── Policy: account filter ────────────────────────────────────── #
         watched = self._cfg.ibkr_watched_accounts
         if watched and ibkr_order.account_id not in watched:
@@ -110,6 +136,11 @@ class Replicator:
                 reason=f"Skipping protective {ibkr_order.order_type} order "
                        f"(SKIP_PROTECTIVE_STOPS=true)",
             )
+
+        # Reserve a slot in the map immediately, so a racy fast cancel
+        # can at least find the cOID even before Tradovate replies.
+        if ibkr_order.cOID:
+            self._order_map.add_pending(ibkr_order.cOID)
 
         # ── Symbol resolution: conid → IBKR symbol → Tradovate symbol ── #
         try:
@@ -130,7 +161,8 @@ class Replicator:
         except TradovateOrderError as e:
             return ReplicationResult(
                 success=False, skipped=False,
-                reason=f"Tradovate /contract/find failed for '{tradovate_symbol}': {e}",
+                reason=f"Tradovate /contract/find failed for "
+                       f"'{tradovate_symbol}': {e}",
             )
 
         # ── Order type & price mapping ───────────────────────────────── #
@@ -167,8 +199,190 @@ class Replicator:
                 reason=f"Tradovate placeorder failed: {e}",
             )
 
+        # Register the mapping for any subsequent cancel/modify on
+        # this IBKR order.
+        if ibkr_order.cOID:
+            self._order_map.set_tradovate_id(ibkr_order.cOID, placed.order_id)
+
         return ReplicationResult(
             success=True, skipped=False,
             reason=f"Replicated to Tradovate orderId={placed.order_id}",
             order=placed,
+        )
+
+    # ================================================================== #
+    #  IBKR response binding (cOID → IBKR order_id)                       #
+    # ================================================================== #
+
+    def register_ibkr_id(self, coid: str, ibkr_order_id: str) -> None:
+        """
+        Called by the addon's response hook when the IBKR new-order
+        POST returns. Binds the IBKR-assigned order_id to the cOID
+        we already stored, so the URL of a future DELETE/PUT can be
+        looked up successfully.
+        """
+        self._order_map.set_ibkr_id(coid, ibkr_order_id)
+
+    # ================================================================== #
+    #  Cancellation                                                       #
+    # ================================================================== #
+
+    def replicate_cancel(
+        self, cancel: IbkrOrderCancel
+    ) -> ReplicationResult:
+        """Look up the Tradovate orderId for the given IBKR order_id
+        and call /order/cancelorder. Never raises."""
+        try:
+            return self._replicate_cancel_inner(cancel)
+        except Exception as e:
+            logger.exception("Unexpected cancel failure: %s", e)
+            return ReplicationResult(
+                success=False, skipped=False,
+                reason=f"Internal error during cancel: {e}",
+            )
+
+    def _replicate_cancel_inner(
+        self, cancel: IbkrOrderCancel
+    ) -> ReplicationResult:
+        watched = self._cfg.ibkr_watched_accounts
+        if watched and cancel.account_id not in watched:
+            return ReplicationResult(
+                success=False, skipped=True,
+                reason=f"IBKR account {cancel.account_id} not in watch list",
+            )
+
+        tradovate_id = self._order_map.tradovate_for_ibkr_id(
+            cancel.ibkr_order_id
+        )
+        if tradovate_id is None:
+            # Either we never replicated this order (e.g. it was
+            # placed before TradeSynchronizer started, or filtered
+            # out by SKIP_PROTECTIVE_STOPS / watch list), or the
+            # Tradovate placeorder hasn't returned yet (rare race).
+            return ReplicationResult(
+                success=False, skipped=True,
+                reason=f"No Tradovate replica known for IBKR order "
+                       f"{cancel.ibkr_order_id} — nothing to cancel.",
+            )
+
+        try:
+            self._tradovate.cancel_order(tradovate_id)
+        except TradovateOrderNotFound as e:
+            # Already filled / cancelled out-of-band. Tidy up and
+            # report as a skip rather than a failure.
+            self._order_map.remove_by_ibkr_id(cancel.ibkr_order_id)
+            return ReplicationResult(
+                success=False, skipped=True,
+                reason=f"Tradovate order {tradovate_id} already gone: {e}",
+            )
+        except (TradovateOrderError, ValueError) as e:
+            return ReplicationResult(
+                success=False, skipped=False,
+                reason=f"Tradovate cancelorder failed: {e}",
+            )
+
+        self._order_map.remove_by_ibkr_id(cancel.ibkr_order_id)
+        return ReplicationResult(
+            success=True, skipped=False,
+            reason=f"Cancelled Tradovate orderId={tradovate_id} "
+                   f"(IBKR id={cancel.ibkr_order_id})",
+        )
+
+    # ================================================================== #
+    #  Modification                                                       #
+    # ================================================================== #
+
+    def replicate_modify(
+        self, modify: IbkrOrderModify
+    ) -> ReplicationResult:
+        """Look up the Tradovate orderId and call /order/modifyorder
+        with the changed fields. Never raises."""
+        try:
+            return self._replicate_modify_inner(modify)
+        except Exception as e:
+            logger.exception("Unexpected modify failure: %s", e)
+            return ReplicationResult(
+                success=False, skipped=False,
+                reason=f"Internal error during modify: {e}",
+            )
+
+    def _replicate_modify_inner(
+        self, modify: IbkrOrderModify
+    ) -> ReplicationResult:
+        watched = self._cfg.ibkr_watched_accounts
+        if watched and modify.account_id not in watched:
+            return ReplicationResult(
+                success=False, skipped=True,
+                reason=f"IBKR account {modify.account_id} not in watch list",
+            )
+
+        tradovate_id = self._order_map.tradovate_for_ibkr_id(
+            modify.ibkr_order_id
+        )
+        if tradovate_id is None:
+            return ReplicationResult(
+                success=False, skipped=True,
+                reason=f"No Tradovate replica known for IBKR order "
+                       f"{modify.ibkr_order_id} — nothing to modify.",
+            )
+
+        # In 'market' replication mode we forced everything to Market
+        # at placement time; modifying price/stop on a Market order is
+        # meaningless. Quantity changes still work — pass them through.
+        if self._cfg.replication_mode == "market":
+            qty = modify.quantity
+            limit_price = None
+            stop_price = None
+            tif = None
+        else:
+            qty = modify.quantity
+            limit_price = modify.price
+            stop_price = modify.aux_price
+            tif = (
+                _TIF_MAP.get(modify.tif) if modify.tif else None
+            )
+
+        if qty is None and limit_price is None and stop_price is None \
+                and tif is None:
+            return ReplicationResult(
+                success=False, skipped=True,
+                reason=f"Modify on IBKR {modify.ibkr_order_id}: no "
+                       f"replicable fields changed.",
+            )
+
+        try:
+            self._tradovate.modify_order(
+                tradovate_id,
+                qty=qty,
+                limit_price=limit_price,
+                stop_price=stop_price,
+                tif=tif,
+            )
+        except TradovateOrderNotFound as e:
+            self._order_map.remove_by_ibkr_id(modify.ibkr_order_id)
+            return ReplicationResult(
+                success=False, skipped=True,
+                reason=f"Tradovate order {tradovate_id} already gone: {e}",
+            )
+        except (TradovateOrderError, ValueError) as e:
+            return ReplicationResult(
+                success=False, skipped=False,
+                reason=f"Tradovate modifyorder failed: {e}",
+            )
+
+        parts = []
+        if qty is not None:
+            parts.append(f"qty={qty}")
+        if limit_price is not None:
+            parts.append(f"limit={limit_price}")
+        if stop_price is not None:
+            parts.append(f"stop={stop_price}")
+        if tif is not None:
+            parts.append(f"tif={tif}")
+        return ReplicationResult(
+            success=True, skipped=False,
+            reason=(
+                f"Modified Tradovate orderId={tradovate_id} "
+                f"(IBKR id={modify.ibkr_order_id}): {', '.join(parts) or '(none)'}"
+            ),
         )

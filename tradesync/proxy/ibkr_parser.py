@@ -1,20 +1,28 @@
 """
-IBKR order payload parser — extracts the trade parameters from
-the request body of a POST to:
+IBKR order traffic parser for the TradingView Desktop integration.
 
-    https://api.ibkr.com/v1/tv/iserver/account/{accountId}/orders
+We observe three flavours of request against:
 
-Body shape (verified against myTradingGuardMacOs traffic_spy_ibkr
-capture, May 2026):
+    https://api.ibkr.com/v1/tv/iserver/account/{accountId}/orders[/{orderId}]
+
+  • POST   .../orders                  →  new order (existing flow)
+  • POST   .../orders/{ibkr_order_id}  →  modify   existing order
+  • DELETE .../orders/{ibkr_order_id}  →  cancel   existing order
+
+(Some TradingView builds may emit PUT instead of POST for modify;
+the parser accepts both for resilience.)
+
+The body shape for new orders was verified against
+myTradingGuardMacOs's traffic_spy_ibkr capture (May 2026):
 
     {
       "orders": [
         {
           "cOID":            "<client-side id>",
-          "conid":           <int>,            # IBKR contract id
+          "conid":           <int>,
           "orderType":       "MKT"|"LMT"|"STP"|"STP LMT",
-          "price":           <float>,          # limit price (LMT/STP LMT)
-          "auxPrice":        <float>,          # stop price (STP/STP LMT)
+          "price":           <float>,
+          "auxPrice":        <float>,
           "quantity":        <float>,
           "side":            "BUY"|"SELL",
           "tif":             "DAY"|"GTC"|"IOC"|"FOK",
@@ -25,9 +33,18 @@ capture, May 2026):
       ]
     }
 
+For modifications, the same body is sent but only the changed fields
+matter (price / quantity / auxPrice / tif). Cancels have no body.
+
 Multi-leg orders (`orders` array of length > 1) are not supported by
 this MVP and raise UnsupportedOrderError. They're rare for futures
 day-trading workflows and lifting that limit later is straightforward.
+
+The POST response from /orders is observed separately by the addon
+so we can capture the IBKR-assigned `order_id` and bind it to the
+client-side `cOID`. Subsequent cancels / modifies arrive with the
+IBKR order_id in the URL, so the cOID is our hinge: the order map
+is keyed by cOID and indexed by IBKR id.
 """
 
 from __future__ import annotations
@@ -40,19 +57,30 @@ from typing import Optional
 from mitmproxy import http
 
 
-# URL of the order-placement endpoint. The trailing `$` excludes the
-# single-order management subroute /order/{id} which is used for
-# cancels and other non-placement actions.
-_ORDER_PATH_RE = re.compile(r"^/v1/tv/iserver/account/[\w]+/orders$")
+# ── URL patterns ─────────────────────────────────────────────────────── #
+
+# New-order placement (no trailing order id).
+_NEW_ORDER_PATH_RE = re.compile(r"^/v1/tv/iserver/account/(?P<acct>[\w]+)/orders$")
+
+# Per-order management: cancel (DELETE) and modify (POST / PUT) live
+# at /orders/{order_id}.
+_SINGLE_ORDER_PATH_RE = re.compile(
+    r"^/v1/tv/iserver/account/(?P<acct>[\w]+)/orders/(?P<order_id>[\w\-]+)$"
+)
+
+
+_IBKR_HOST = "api.ibkr.com"
 
 
 class UnsupportedOrderError(RuntimeError):
     """Raised when the IBKR order can't be safely replicated."""
 
 
+# ── Parsed-request dataclasses ───────────────────────────────────────── #
+
 @dataclass
 class IbkrOrder:
-    """Normalised IBKR order, ready for translation to Tradovate."""
+    """Normalised IBKR new order, ready for translation to Tradovate."""
 
     account_id: str          # IBKR account, e.g. "U1234567"
     conid:      int          # IBKR numeric contract id
@@ -76,31 +104,77 @@ class IbkrOrder:
         return self.order_type in ("STP", "STP LMT")
 
 
-def is_ibkr_order_request(flow: http.HTTPFlow) -> bool:
+@dataclass
+class IbkrOrderCancel:
+    """Cancellation request — DELETE on /orders/{order_id}."""
+    account_id: str
+    ibkr_order_id: str       # IBKR-assigned id taken from the URL
+
+
+@dataclass
+class IbkrOrderModify:
     """
-    True when the flow is the POST that places a new IBKR order via
-    the TradingView integration. Modifications (PUT/PATCH) and the
-    cancel route /order/{id} are excluded — we only want fresh
-    placements.
+    Modification request — POST/PUT on /orders/{order_id}.
+
+    Only fields the user actually changed will be populated; the rest
+    are None. The replicator translates the non-None fields to a
+    Tradovate modifyorder call.
     """
+    account_id:    str
+    ibkr_order_id: str
+    quantity:      Optional[int]
+    price:         Optional[float]
+    aux_price:     Optional[float]
+    tif:           Optional[str]
+    raw:           dict
+
+
+# ── Request classification ───────────────────────────────────────────── #
+
+def _is_ibkr_host(flow: http.HTTPFlow) -> bool:
+    return _IBKR_HOST in flow.request.pretty_host
+
+
+def is_new_order_request(flow: http.HTTPFlow) -> bool:
+    """True when this is a POST that places a NEW order (no trailing id)."""
     if flow.request.method != "POST":
         return False
-    if "api.ibkr.com" not in flow.request.pretty_host:
+    if not _is_ibkr_host(flow):
         return False
-    return bool(_ORDER_PATH_RE.match(flow.request.path))
+    return bool(_NEW_ORDER_PATH_RE.match(flow.request.path))
 
+
+# Keep the old name as an alias so existing code/tests don't break.
+is_ibkr_order_request = is_new_order_request
+
+
+def is_cancel_order_request(flow: http.HTTPFlow) -> bool:
+    """True when this is a DELETE on /orders/{order_id}."""
+    if flow.request.method != "DELETE":
+        return False
+    if not _is_ibkr_host(flow):
+        return False
+    return bool(_SINGLE_ORDER_PATH_RE.match(flow.request.path))
+
+
+def is_modify_order_request(flow: http.HTTPFlow) -> bool:
+    """True when this is a POST/PUT on /orders/{order_id}."""
+    if flow.request.method not in ("POST", "PUT"):
+        return False
+    if not _is_ibkr_host(flow):
+        return False
+    return bool(_SINGLE_ORDER_PATH_RE.match(flow.request.path))
+
+
+# ── Parsers ──────────────────────────────────────────────────────────── #
 
 def parse_ibkr_order(flow: http.HTTPFlow) -> IbkrOrder:
     """
-    Decode the order POST body into an `IbkrOrder`. Raises
+    Decode the new-order POST body into an `IbkrOrder`. Raises
     UnsupportedOrderError on malformed or multi-leg payloads.
     """
-    try:
-        body = json.loads(flow.request.content or b"{}")
-    except json.JSONDecodeError as e:
-        raise UnsupportedOrderError(f"Body is not valid JSON: {e}") from e
-
-    orders = body.get("orders")
+    body = _decode_json_body(flow.request.content)
+    orders = body.get("orders") if isinstance(body, dict) else None
     if not isinstance(orders, list) or not orders:
         raise UnsupportedOrderError(f"Missing 'orders' array in body: {body}")
     if len(orders) > 1:
@@ -145,6 +219,118 @@ def parse_ibkr_order(flow: http.HTTPFlow) -> IbkrOrder:
         cOID=o.get("cOID"),
         raw=o,
     )
+
+
+def parse_ibkr_cancel(flow: http.HTTPFlow) -> IbkrOrderCancel:
+    """Extract account_id and IBKR order_id from a DELETE URL."""
+    m = _SINGLE_ORDER_PATH_RE.match(flow.request.path)
+    if not m:
+        raise UnsupportedOrderError(
+            f"DELETE path doesn't match /orders/{{order_id}}: {flow.request.path}"
+        )
+    return IbkrOrderCancel(
+        account_id=m.group("acct"),
+        ibkr_order_id=m.group("order_id"),
+    )
+
+
+def parse_ibkr_modify(flow: http.HTTPFlow) -> IbkrOrderModify:
+    """
+    Decode a modification POST/PUT. Same body shape as new orders,
+    but every field is optional — only what the user changed is sent
+    (in practice TradingView often resends the full body, so we
+    don't insist on having any specific field).
+    """
+    m = _SINGLE_ORDER_PATH_RE.match(flow.request.path)
+    if not m:
+        raise UnsupportedOrderError(
+            f"Modify path doesn't match /orders/{{order_id}}: {flow.request.path}"
+        )
+    account_id = m.group("acct")
+    ibkr_order_id = m.group("order_id")
+
+    body = _decode_json_body(flow.request.content)
+    orders = body.get("orders") if isinstance(body, dict) else None
+    o = orders[0] if isinstance(orders, list) and orders else (
+        body if isinstance(body, dict) else {}
+    )
+
+    qty_raw = o.get("quantity")
+    qty: Optional[int]
+    if qty_raw is None:
+        qty = None
+    else:
+        try:
+            qty = int(float(qty_raw))
+        except (TypeError, ValueError):
+            qty = None
+        if qty is not None and qty <= 0:
+            qty = None
+
+    tif = o.get("tif")
+    return IbkrOrderModify(
+        account_id=account_id,
+        ibkr_order_id=ibkr_order_id,
+        quantity=qty,
+        price=_to_float(o.get("price")),
+        aux_price=_to_float(o.get("auxPrice")),
+        tif=tif.upper() if isinstance(tif, str) else None,
+        raw=o if isinstance(o, dict) else {},
+    )
+
+
+# ── Response parsing — capture the IBKR-assigned order_id ────────────── #
+
+def parse_new_order_response_id(flow: http.HTTPFlow) -> Optional[str]:
+    """
+    Extract the IBKR-assigned order_id from a new-order POST response.
+    Returns None on any parse failure — the addon downgrades that to
+    "subsequent cancel/modify by IBKR id won't have a mapping, will
+    log a warning, and we move on" rather than crashing.
+
+    IBKR's TV-flavour response shape isn't fully documented; we accept
+    a few common dialects:
+
+        {"order_id": "...", ...}
+        {"orderId":  "...", ...}
+        [{"order_id": "...", ...}, ...]                # array form
+        {"orders": [{"order_id": "...", ...}, ...]}    # nested-orders form
+    """
+    if flow.response is None or flow.response.status_code not in (200, 201):
+        return None
+    try:
+        body = _decode_json_body(flow.response.content)
+    except UnsupportedOrderError:
+        return None
+    if isinstance(body, list) and body:
+        return _extract_order_id(body[0])
+    if isinstance(body, dict):
+        if "orders" in body and isinstance(body["orders"], list) and body["orders"]:
+            return _extract_order_id(body["orders"][0])
+        return _extract_order_id(body)
+    return None
+
+
+def _extract_order_id(d) -> Optional[str]:
+    if not isinstance(d, dict):
+        return None
+    for key in ("order_id", "orderId", "orderid", "id"):
+        v = d.get(key)
+        if v is not None and v != "":
+            return str(v)
+    return None
+
+
+# ── Internal helpers ─────────────────────────────────────────────────── #
+
+def _decode_json_body(raw: Optional[bytes]) -> dict:
+    if not raw:
+        return {}
+    try:
+        out = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise UnsupportedOrderError(f"Body is not valid JSON: {e}") from e
+    return out if isinstance(out, (dict, list)) else {}
 
 
 def _to_float(v) -> Optional[float]:

@@ -50,7 +50,15 @@ class TradovateAuthError(RuntimeError):
 
 
 class TradovateOrderError(RuntimeError):
-    """Raised when /order/placeorder rejects or returns an unexpected body."""
+    """Raised when /order/placeorder/cancelorder/modifyorder rejects or
+    returns an unexpected body."""
+
+
+class TradovateOrderNotFound(TradovateOrderError):
+    """Raised when /order/cancelorder or /order/modifyorder reports
+    that the target orderId is unknown — usually because the order
+    was already filled or already cancelled by the time we got here.
+    The caller can treat this as benign (best-effort sync)."""
 
 
 @dataclass
@@ -380,6 +388,143 @@ class TradovateClient:
 
         logger.info("✓ Tradovate order placed — id=%s", order_id)
         return PlacedOrder(order_id=int(order_id), raw=body)
+
+    # ------------------------------------------------------------------ #
+    #  Order cancellation                                                 #
+    # ------------------------------------------------------------------ #
+
+    def cancel_order(self, order_id: int) -> dict:
+        """
+        POST /order/cancelorder for an existing order. Returns the raw
+        Tradovate response on success (mostly useful for logs and
+        tests); raises TradovateOrderNotFound if the order id is
+        unknown (typical of orders that already filled or cancelled
+        before we got here).
+        """
+        if not self.connected:
+            raise TradovateOrderError("Not connected — call connect() first")
+        if not isinstance(order_id, int) or order_id <= 0:
+            raise ValueError(f"order_id must be a positive int, got {order_id!r}")
+
+        self._ensure_fresh_token()
+
+        payload = {"orderId": int(order_id)}
+        logger.info("Cancelling Tradovate order: id=%s", order_id)
+
+        try:
+            resp = self._http.post(
+                f"{self._api_url}/order/cancelorder",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {self._access_token}",
+                    "Content-Type": "application/json",
+                },
+                timeout=10,
+            )
+        except requests.RequestException as e:
+            raise TradovateOrderError(f"cancelorder network error: {e}") from e
+
+        return self._unpack_lifecycle_response(
+            resp, action="cancelorder", order_id=order_id
+        )
+
+    # ------------------------------------------------------------------ #
+    #  Order modification                                                 #
+    # ------------------------------------------------------------------ #
+
+    def modify_order(
+        self,
+        order_id: int,
+        *,
+        qty: Optional[int] = None,
+        limit_price: Optional[float] = None,
+        stop_price: Optional[float] = None,
+        tif: Optional[str] = None,
+    ) -> dict:
+        """
+        POST /order/modifyorder for an existing order. Only the
+        non-None fields are sent. Returns the raw response on success;
+        raises TradovateOrderNotFound if the order id is unknown.
+        """
+        if not self.connected:
+            raise TradovateOrderError("Not connected — call connect() first")
+        if not isinstance(order_id, int) or order_id <= 0:
+            raise ValueError(f"order_id must be a positive int, got {order_id!r}")
+        if qty is None and limit_price is None and stop_price is None \
+                and tif is None:
+            raise ValueError(
+                "modify_order called with nothing to change — pass at least "
+                "one of qty / limit_price / stop_price / tif"
+            )
+
+        self._ensure_fresh_token()
+
+        payload: dict = {"orderId": int(order_id), "isAutomated": True}
+        if qty is not None:
+            if not isinstance(qty, int) or qty <= 0:
+                raise ValueError(f"qty must be a positive int, got {qty!r}")
+            payload["orderQty"] = int(qty)
+        if limit_price is not None:
+            payload["price"] = float(limit_price)
+        if stop_price is not None:
+            payload["stopPrice"] = float(stop_price)
+        if tif is not None:
+            payload["timeInForce"] = tif
+
+        logger.info("Modifying Tradovate order: %s", payload)
+
+        try:
+            resp = self._http.post(
+                f"{self._api_url}/order/modifyorder",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {self._access_token}",
+                    "Content-Type": "application/json",
+                },
+                timeout=10,
+            )
+        except requests.RequestException as e:
+            raise TradovateOrderError(f"modifyorder network error: {e}") from e
+
+        return self._unpack_lifecycle_response(
+            resp, action="modifyorder", order_id=order_id
+        )
+
+    def _unpack_lifecycle_response(
+        self, resp: requests.Response, *, action: str, order_id: int
+    ) -> dict:
+        """Common response handling for cancelorder / modifyorder."""
+        if resp.status_code not in (200, 201):
+            raise TradovateOrderError(
+                f"{action} HTTP {resp.status_code}: {resp.text[:500]}"
+            )
+
+        body: dict
+        try:
+            body = resp.json() if resp.content else {}
+        except ValueError as e:
+            raise TradovateOrderError(
+                f"{action} returned non-JSON body: {e}"
+            ) from e
+
+        # Tradovate's failure mode: 200 with a failureReason in the body.
+        failure = body.get("failureReason") or body.get("rejectReason")
+        text = body.get("failureText") or body.get("text") or body.get("errorText")
+        if failure:
+            # "OrderNotFound" / "NotFound" — typical when the order
+            # already filled or was already cancelled out-of-band.
+            if isinstance(failure, str) and "notfound" in failure.replace(" ", "").lower():
+                raise TradovateOrderNotFound(
+                    f"{action} for orderId={order_id} — not found "
+                    f"({failure}{': ' + text if text else ''})"
+                )
+            raise TradovateOrderError(
+                f"{action} failed: {failure}{': ' + text if text else ''}. "
+                f"Body: {body}"
+            )
+
+        logger.info("✓ Tradovate %s OK — orderId=%s", action, order_id)
+        return body
 
     # ------------------------------------------------------------------ #
     #  HTTP helpers                                                       #

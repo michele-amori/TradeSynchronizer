@@ -22,6 +22,9 @@ venv/
 *.log
 /tmp/tradesync.log
 
+# Persistent state (order id maps etc.) — per-env JSON files
+/.tradesync-state/
+
 # OS noise
 .DS_Store
 
