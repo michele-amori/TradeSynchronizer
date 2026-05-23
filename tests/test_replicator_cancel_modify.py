@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from tradesync.brokers.tradovate import (
+    PlacedBracket,
     PlacedOrder,
     TradovateOrderError,
     TradovateOrderNotFound,
@@ -23,6 +24,8 @@ from tradesync.brokers.tradovate import (
 from tradesync.config import Config
 from tradesync.order_map import OrderMap
 from tradesync.proxy.ibkr_parser import (
+    IbkrBracket,
+    IbkrBracketChild,
     IbkrOrder,
     IbkrOrderCancel,
     IbkrOrderModify,
@@ -53,11 +56,13 @@ class FakeTradovate:
 
     def __init__(self):
         self.placed: list[dict] = []
+        self.brackets_placed: list[dict] = []
         self.cancelled: list[int] = []
         self.modified: list[dict] = []
         self.next_order_id = 1000
         self.cancel_raises: Optional[BaseException] = None
         self.modify_raises: Optional[BaseException] = None
+        self.bracket_raises: Optional[BaseException] = None
         self.connected = True
 
     def get_contract_id(self, _symbol: str) -> int:
@@ -82,6 +87,22 @@ class FakeTradovate:
         rec.update(changes)
         self.modified.append(rec)
         return rec
+
+    def place_bracket(self, **kwargs):
+        self.brackets_placed.append(kwargs)
+        entry_id = self.next_order_id
+        self.next_order_id += 1
+        n_brackets = len(kwargs.get("brackets") or [])
+        bracket_ids = []
+        for _ in range(n_brackets):
+            bracket_ids.append(self.next_order_id)
+            self.next_order_id += 1
+        return PlacedBracket(
+            entry_order_id=entry_id,
+            bracket_ids=bracket_ids,
+            oco_id=99,
+            raw={"orderId": entry_id, "oso1Id": bracket_ids[0] if bracket_ids else None},
+        )
 
 
 def _make_config(*, watched=None, mode="mirror") -> Config:
@@ -308,6 +329,144 @@ class TestReplicateModify(unittest.TestCase):
             ))
             self.assertTrue(result.skipped)
             self.assertIsNone(store.tradovate_for_ibkr_id("ibkr-42"))
+
+
+# ── Bracket dispatch ───────────────────────────────────────────────────── #
+
+def _make_bracket(*, entry_cOID="tv-entry", tp_cOID="tv-tp",
+                  sl_cOID="tv-sl", entry_side="BUY",
+                  account_id="U7713037", entry_type="LMT",
+                  entry_price=21500.0) -> IbkrBracket:
+    """Build a 3-leg bracket: entry + take-profit + stop-loss."""
+    entry = IbkrOrder(
+        account_id=account_id, conid=845307883, side=entry_side,
+        quantity=2, order_type=entry_type, price=entry_price,
+        aux_price=None, tif="DAY", cOID=entry_cOID, raw={},
+    )
+    opp = "SELL" if entry_side == "BUY" else "BUY"
+    tp = IbkrBracketChild(
+        side=opp, quantity=2, order_type="LMT",
+        price=21550.0, aux_price=None, tif="DAY",
+        cOID=tp_cOID, raw={},
+    )
+    sl = IbkrBracketChild(
+        side=opp, quantity=2, order_type="STP",
+        price=None, aux_price=21450.0, tif="DAY",
+        cOID=sl_cOID, raw={},
+    )
+    return IbkrBracket(entry=entry, children=[tp, sl])
+
+
+class TestReplicateBracket(unittest.TestCase):
+
+    def test_happy_path_registers_all_legs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, store = _build_replicator(tmp_path=Path(tmp))
+            result = r.replicate_new(_make_bracket())
+            self.assertTrue(result.success, result.reason)
+            # Tradovate received exactly one placeoso call with both
+            # children present.
+            self.assertEqual(len(tradovate.brackets_placed), 1)
+            call = tradovate.brackets_placed[0]
+            self.assertEqual(call["entry_action"], "Buy")
+            self.assertEqual(call["entry_qty"], 2)
+            self.assertEqual(call["entry_order_type"], "Limit")
+            self.assertEqual(call["entry_limit_price"], 21500.0)
+            self.assertEqual(len(call["brackets"]), 2)
+            # TP child: Sell, Limit @ 21550
+            self.assertEqual(call["brackets"][0]["action"], "Sell")
+            self.assertEqual(call["brackets"][0]["order_type"], "Limit")
+            self.assertEqual(call["brackets"][0]["limit_price"], 21550.0)
+            # SL child: Sell, Stop @ 21450 (aux)
+            self.assertEqual(call["brackets"][1]["action"], "Sell")
+            self.assertEqual(call["brackets"][1]["order_type"], "Stop")
+            self.assertEqual(call["brackets"][1]["stop_price"], 21450.0)
+            # OrderMap got one entry per leg (entry + 2 children)
+            # using sequential ids assigned by FakeTradovate.
+            self.assertIsNotNone(store.get_by_coid("tv-entry"))
+            self.assertEqual(store.get_by_coid("tv-entry").tradovate_id, 1000)
+            self.assertEqual(store.get_by_coid("tv-tp").tradovate_id, 1001)
+            self.assertEqual(store.get_by_coid("tv-sl").tradovate_id, 1002)
+
+    def test_each_leg_is_independently_cancellable(self):
+        """After replicate_new(bracket) + register_ibkr_id for each
+        leg, a DELETE on any IBKR id translates correctly to the
+        right Tradovate orderId."""
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, store = _build_replicator(tmp_path=Path(tmp))
+            r.replicate_new(_make_bracket())
+            # Simulate the addon's response hook binding every leg
+            r.register_ibkr_id("tv-entry", "ibkr-entry")
+            r.register_ibkr_id("tv-tp",    "ibkr-tp")
+            r.register_ibkr_id("tv-sl",    "ibkr-sl")
+            # Now cancel the SL leg
+            result = r.replicate_cancel(IbkrOrderCancel(
+                account_id="U7713037", ibkr_order_id="ibkr-sl"))
+            self.assertTrue(result.success, result.reason)
+            self.assertEqual(tradovate.cancelled, [1002])
+            # SL entry gone from the map; entry + TP still there
+            self.assertIsNone(store.tradovate_for_ibkr_id("ibkr-sl"))
+            self.assertEqual(store.tradovate_for_ibkr_id("ibkr-entry"), 1000)
+            self.assertEqual(store.tradovate_for_ibkr_id("ibkr-tp"), 1001)
+
+    def test_account_filter_skips_whole_bracket(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, _ = _build_replicator(
+                cfg=_make_config(watched=["U9999999"]),
+                tmp_path=Path(tmp),
+            )
+            result = r.replicate_new(_make_bracket(account_id="U7713037"))
+            self.assertTrue(result.skipped)
+            self.assertEqual(tradovate.brackets_placed, [])
+
+    def test_market_mode_degrades_entry_but_keeps_child_prices(self):
+        """In replication_mode='market', the ENTRY becomes a Market
+        order (no price) but the bracket exits MUST keep their
+        prices — a market TP/SL would be meaningless."""
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, _ = _build_replicator(
+                cfg=_make_config(mode="market"),
+                tmp_path=Path(tmp),
+            )
+            r.replicate_new(_make_bracket())
+            call = tradovate.brackets_placed[0]
+            self.assertEqual(call["entry_order_type"], "Market")
+            self.assertIsNone(call["entry_limit_price"])
+            self.assertIsNone(call["entry_stop_price"])
+            # Children keep their original types and prices
+            self.assertEqual(call["brackets"][0]["order_type"], "Limit")
+            self.assertEqual(call["brackets"][0]["limit_price"], 21550.0)
+            self.assertEqual(call["brackets"][1]["order_type"], "Stop")
+            self.assertEqual(call["brackets"][1]["stop_price"], 21450.0)
+
+    def test_skip_protective_stops_does_not_skip_bracket(self):
+        """SKIP_PROTECTIVE_STOPS targets STANDALONE protective stops.
+        Inside a coordinated bracket the stop-loss is part of the
+        risk-management structure and must be replicated together
+        with entry + TP."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = _make_config()
+            # default is already skip_protective_stops=True; assert it
+            self.assertTrue(cfg.skip_protective_stops)
+            r, tradovate, _ = _build_replicator(
+                cfg=cfg, tmp_path=Path(tmp),
+            )
+            result = r.replicate_new(_make_bracket())
+            self.assertTrue(result.success, result.reason)
+            # Whole bracket placed, no leg skipped
+            self.assertEqual(len(tradovate.brackets_placed), 1)
+            self.assertEqual(
+                len(tradovate.brackets_placed[0]["brackets"]), 2)
+
+    def test_bracket_with_one_child_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, _ = _build_replicator(tmp_path=Path(tmp))
+            br = _make_bracket()
+            br.children.pop()        # drop the SL, leaving just TP
+            result = r.replicate_new(br)
+            self.assertTrue(result.success, result.reason)
+            self.assertEqual(
+                len(tradovate.brackets_placed[0]["brackets"]), 1)
 
 
 if __name__ == "__main__":

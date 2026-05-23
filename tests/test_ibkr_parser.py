@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from tradesync.proxy.ibkr_parser import (
+    IbkrBracket,
+    IbkrOrder,
     UnsupportedOrderError,
     is_cancel_order_request,
     is_ibkr_order_request,
@@ -24,6 +26,7 @@ from tradesync.proxy.ibkr_parser import (
     parse_ibkr_modify,
     parse_ibkr_order,
     parse_new_order_response_id,
+    parse_new_order_response_ids,
 )
 
 
@@ -315,6 +318,213 @@ class TestParseNewOrderResponseId(unittest.TestCase):
         # Response parsing fails soft — we don't want to crash the
         # proxy hook just because IBKR returned an unexpected body.
         self.assertIsNone(parse_new_order_response_id(f))
+
+
+# ── Bracket / OCO parsing ──────────────────────────────────────────────── #
+
+class TestBracketParsing(unittest.TestCase):
+    """`parse_ibkr_order` returns IbkrBracket for a multi-leg POST
+    whose legs form a valid entry+children structure."""
+
+    def _entry(self, **overrides):
+        base = {
+            "cOID":      "tv-entry",
+            "conid":     845307883,
+            "orderType": "LMT",
+            "price":     21500.0,
+            "quantity":  2,
+            "side":      "BUY",
+            "tif":       "DAY",
+            "acctId":    "U7713037",
+        }
+        base.update(overrides)
+        return base
+
+    def _child(self, **overrides):
+        base = {
+            "cOID":      "tv-tp",
+            "parentId":  "tv-entry",
+            "orderType": "LMT",
+            "price":     21550.0,
+            "quantity":  2,
+            "side":      "SELL",
+            "tif":       "DAY",
+            "acctId":    "U7713037",
+        }
+        base.update(overrides)
+        return base
+
+    def _flow(self, *legs):
+        return _make_flow({"orders": list(legs)})
+
+    # ── happy paths ───────────────────────────────────────────────── #
+
+    def test_entry_with_tp_and_sl_parses_as_bracket(self):
+        tp = self._child(cOID="tv-tp", orderType="LMT", price=21550.0)
+        sl = self._child(cOID="tv-sl", orderType="STP", auxPrice=21450.0,
+                         price=None)
+        result = parse_ibkr_order(self._flow(self._entry(), tp, sl))
+        self.assertIsInstance(result, IbkrBracket)
+        self.assertEqual(result.entry.cOID, "tv-entry")
+        self.assertEqual(result.entry.side, "BUY")
+        self.assertEqual(result.entry.order_type, "LMT")
+        self.assertEqual(len(result.children), 2)
+        # Children kept in body order
+        self.assertEqual(result.children[0].cOID, "tv-tp")
+        self.assertEqual(result.children[0].order_type, "LMT")
+        self.assertEqual(result.children[0].price, 21550.0)
+        self.assertEqual(result.children[1].cOID, "tv-sl")
+        self.assertEqual(result.children[1].order_type, "STP")
+        self.assertEqual(result.children[1].aux_price, 21450.0)
+        # Both children inherit the opposite side
+        for c in result.children:
+            self.assertEqual(c.side, "SELL")
+
+    def test_entry_with_single_child_is_accepted(self):
+        # A 2-leg bracket is also valid (e.g. entry + just a stop)
+        result = parse_ibkr_order(self._flow(
+            self._entry(),
+            self._child(cOID="tv-sl-only", orderType="STP",
+                        auxPrice=21450.0, price=None),
+        ))
+        self.assertIsInstance(result, IbkrBracket)
+        self.assertEqual(len(result.children), 1)
+        self.assertEqual(result.children[0].cOID, "tv-sl-only")
+
+    def test_stplmt_canonical_form_in_child(self):
+        result = parse_ibkr_order(self._flow(
+            self._entry(),
+            self._child(cOID="tv-sl", orderType="STPLMT",
+                        price=21450.0, auxPrice=21455.0),
+        ))
+        self.assertEqual(result.children[0].order_type, "STP LMT")
+
+    # ── single-leg still returns IbkrOrder ────────────────────────── #
+
+    def test_single_leg_still_returns_ibkr_order(self):
+        result = parse_ibkr_order(_make_flow({
+            "orders": [self._entry()]
+        }))
+        self.assertIsInstance(result, IbkrOrder)
+        self.assertNotIsInstance(result, IbkrBracket)
+
+    # ── rejections ────────────────────────────────────────────────── #
+
+    def test_rejects_bracket_with_no_entry(self):
+        # All legs have parentId — no entry
+        with self.assertRaises(UnsupportedOrderError):
+            parse_ibkr_order(self._flow(
+                self._child(cOID="tv-a", parentId="tv-x"),
+                self._child(cOID="tv-b", parentId="tv-x"),
+            ))
+
+    def test_rejects_bracket_with_two_entries(self):
+        # Two legs with no parentId — not a recognisable bracket.
+        # This is also what the historical `test_rejects_multi_leg`
+        # asserted, preserved here.
+        body = {"orders": [self._entry(cOID="tv-a"),
+                           self._entry(cOID="tv-b")]}
+        with self.assertRaises(UnsupportedOrderError):
+            parse_ibkr_order(_make_flow(body))
+
+    def test_rejects_three_children(self):
+        # Tradovate placeoso supports at most 2 brackets.
+        with self.assertRaises(UnsupportedOrderError):
+            parse_ibkr_order(self._flow(
+                self._entry(),
+                self._child(cOID="tv-c1"),
+                self._child(cOID="tv-c2"),
+                self._child(cOID="tv-c3"),
+            ))
+
+    def test_rejects_child_with_wrong_parent_id(self):
+        with self.assertRaises(UnsupportedOrderError):
+            parse_ibkr_order(self._flow(
+                self._entry(cOID="tv-entry"),
+                self._child(cOID="tv-tp", parentId="WRONG-PARENT"),
+            ))
+
+    def test_rejects_child_on_same_side_as_entry(self):
+        # Entry BUY, child also BUY → not an exit, refuse to replicate
+        # to avoid accidentally doubling the position.
+        with self.assertRaises(UnsupportedOrderError):
+            parse_ibkr_order(self._flow(
+                self._entry(side="BUY"),
+                self._child(side="BUY", orderType="LMT", price=21550.0),
+            ))
+
+    def test_rejects_child_with_market_order_type(self):
+        # Brackets must be limit or stop — a market child is meaningless.
+        with self.assertRaises(UnsupportedOrderError):
+            parse_ibkr_order(self._flow(
+                self._entry(),
+                self._child(orderType="MKT"),
+            ))
+
+    def test_rejects_bracket_when_entry_has_no_coid(self):
+        body = self._entry()
+        del body["cOID"]
+        with self.assertRaises(UnsupportedOrderError):
+            parse_ibkr_order(self._flow(body, self._child()))
+
+
+# ── Multi-id response parsing ──────────────────────────────────────────── #
+
+class TestParseNewOrderResponseIds(unittest.TestCase):
+    """parse_new_order_response_ids returns ONE pair per leg, in
+    body order. Used by the addon to bind every cOID in a bracket
+    to its IBKR-assigned order_id."""
+
+    def test_returns_all_pairs_from_array_with_coids(self):
+        body = [
+            {"order_id": "i-1", "cOID": "c-1"},
+            {"order_id": "i-2", "cOID": "c-2"},
+            {"order_id": "i-3", "cOID": "c-3"},
+        ]
+        f = _make_response_flow(200, body)
+        pairs = parse_new_order_response_ids(f)
+        self.assertEqual(pairs, [
+            ("c-1", "i-1"), ("c-2", "i-2"), ("c-3", "i-3"),
+        ])
+
+    def test_pairs_with_no_coid_in_response(self):
+        # IBKR returns order_ids but doesn't echo the cOID — the
+        # addon will fall back to positional matching with the
+        # stashed request cOIDs.
+        body = [{"order_id": "i-1"}, {"order_id": "i-2"}]
+        pairs = parse_new_order_response_ids(_make_response_flow(200, body))
+        self.assertEqual(pairs, [(None, "i-1"), (None, "i-2")])
+
+    def test_single_dict_response_yields_one_pair(self):
+        body = {"order_id": "i-1", "cOID": "c-1"}
+        pairs = parse_new_order_response_ids(_make_response_flow(200, body))
+        self.assertEqual(pairs, [("c-1", "i-1")])
+
+    def test_nested_orders_array(self):
+        body = {"orders": [
+            {"orderId": "i-1", "cOID": "c-1"},
+            {"orderId": "i-2", "cOID": "c-2"},
+        ]}
+        pairs = parse_new_order_response_ids(_make_response_flow(200, body))
+        self.assertEqual(pairs, [("c-1", "i-1"), ("c-2", "i-2")])
+
+    def test_skips_entries_without_an_order_id(self):
+        body = [
+            {"order_id": "i-1", "cOID": "c-1"},
+            {"cOID": "c-2-no-id"},        # malformed, skipped
+            {"order_id": "i-3", "cOID": "c-3"},
+        ]
+        pairs = parse_new_order_response_ids(_make_response_flow(200, body))
+        self.assertEqual(pairs, [("c-1", "i-1"), ("c-3", "i-3")])
+
+    def test_back_compat_singular_returns_first_id(self):
+        body = [
+            {"order_id": "i-1", "cOID": "c-1"},
+            {"order_id": "i-2", "cOID": "c-2"},
+        ]
+        f = _make_response_flow(200, body)
+        # The legacy singular helper just returns the first id.
+        self.assertEqual(parse_new_order_response_id(f), "i-1")
 
 
 if __name__ == "__main__":

@@ -68,6 +68,19 @@ class PlacedOrder:
     raw: dict
 
 
+@dataclass
+class PlacedBracket:
+    """
+    Result of a successful placeOSO (bracket) call. `bracket_ids`
+    is a list of 1 or 2 child order ids in the same order as the
+    `brackets` list passed to place_bracket().
+    """
+    entry_order_id: int
+    bracket_ids:    list           # type: list[int]
+    oco_id:         Optional[int]
+    raw:            dict
+
+
 class TradovateClient:
 
     def __init__(
@@ -388,6 +401,155 @@ class TradovateClient:
 
         logger.info("✓ Tradovate order placed — id=%s", order_id)
         return PlacedOrder(order_id=int(order_id), raw=body)
+
+    # ------------------------------------------------------------------ #
+    #  Bracket placement (placeoso)                                       #
+    # ------------------------------------------------------------------ #
+
+    def place_bracket(
+        self,
+        *,
+        tradovate_symbol: str,
+        contract_id: int,
+        entry_action: str,                 # "Buy" | "Sell"
+        entry_qty: int,
+        entry_order_type: str,             # "Market" | "Limit" | "Stop" | "StopLimit"
+        entry_limit_price: Optional[float] = None,
+        entry_stop_price:  Optional[float] = None,
+        entry_tif: str = "Day",
+        brackets: Optional[list] = None,   # type: list[dict] — 1 or 2 child legs
+    ) -> PlacedBracket:
+        """
+        POST /order/placeoso for an entry-with-brackets group.
+
+        Each entry of `brackets` is a dict shaped like:
+
+            {
+              "action":      "Buy" | "Sell",
+              "order_type":  "Limit" | "Stop" | "StopLimit",
+              "limit_price": float | None,
+              "stop_price":  float | None,
+              "tif":         "Day" | "GTC" | ...,
+            }
+
+        IMPORTANT — empirical disclaimer:
+        Tradovate's bracket endpoint accepts a `bracket1` / `bracket2`
+        sibling pair on the parent payload, and the success response
+        carries `orderId` for the entry plus `oso1Id` / `oso2Id` for
+        the children. This shape matches the documented Tradovate REST
+        API as of the JS adapter we ported from, but the exact field
+        names have not been verified against a live trade since this
+        codebase only mirrors single orders so far. On first real-life
+        bracket replication, expect this method to either succeed or
+        fail loudly — the raw response body is included in any error
+        for diagnostic purposes.
+        """
+        if not self.connected:
+            raise TradovateOrderError("Not connected — call connect() first")
+        if not brackets or len(brackets) > 2:
+            raise ValueError(
+                f"place_bracket requires 1..2 children, got {len(brackets or [])}"
+            )
+
+        self._ensure_fresh_token()
+
+        payload: dict = {
+            "accountId":   self._account_id,
+            "action":      entry_action,
+            "symbol":      tradovate_symbol,
+            "contractId":  contract_id,
+            "orderQty":    int(entry_qty),
+            "orderType":   entry_order_type,
+            "timeInForce": entry_tif,
+            "isAutomated": True,
+        }
+        if entry_limit_price is not None:
+            payload["price"] = float(entry_limit_price)
+        if entry_stop_price is not None:
+            payload["stopPrice"] = float(entry_stop_price)
+
+        for idx, b in enumerate(brackets, start=1):
+            slot = f"bracket{idx}"
+            child: dict = {
+                "action":      b["action"],
+                "orderType":   b["order_type"],
+                "orderQty":    int(b.get("qty", entry_qty)),
+                "timeInForce": b.get("tif", "Day"),
+                "isAutomated": True,
+            }
+            if b.get("limit_price") is not None:
+                child["price"] = float(b["limit_price"])
+            if b.get("stop_price") is not None:
+                child["stopPrice"] = float(b["stop_price"])
+            payload[slot] = child
+
+        logger.info("Placing Tradovate bracket order: %s", payload)
+
+        try:
+            resp = self._http.post(
+                f"{self._api_url}/order/placeoso",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {self._access_token}",
+                    "Content-Type": "application/json",
+                },
+                timeout=15,
+            )
+        except requests.RequestException as e:
+            raise TradovateOrderError(f"placeoso network error: {e}") from e
+
+        if resp.status_code not in (200, 201):
+            raise TradovateOrderError(
+                f"placeoso HTTP {resp.status_code}: {resp.text[:600]}"
+            )
+        body = resp.json()
+        if body.get("ordStatus") == "Rejected" or body.get("rejectReason"):
+            reason = body.get("rejectReason") or "Rejected"
+            text = body.get("text") or body.get("errorText") or ""
+            raise TradovateOrderError(
+                f"Tradovate rejected bracket: {reason} — {text}. Body: {body}"
+            )
+
+        entry_id = body.get("orderId")
+        if entry_id is None:
+            raise TradovateOrderError(
+                f"placeoso response missing entry orderId. Body: {body}"
+            )
+
+        # Defensive: Tradovate has historically used oso1Id / oso2Id
+        # for the children but a few variants exist (orderIds array,
+        # bracket1Id naming, …). Try the obvious slot names in order.
+        bracket_ids: list = []
+        for idx in (1, 2):
+            for key in (f"oso{idx}Id", f"bracket{idx}Id",
+                        f"bracket{idx}OrderId"):
+                if key in body and body[key] is not None:
+                    bracket_ids.append(int(body[key]))
+                    break
+        # Fallback shape: {"orderIds": [entry_id, b1_id, b2_id, ...]}
+        if not bracket_ids and isinstance(body.get("orderIds"), list):
+            ids = [int(x) for x in body["orderIds"] if x is not None]
+            bracket_ids = [i for i in ids if i != int(entry_id)]
+
+        if len(bracket_ids) != len(brackets):
+            logger.warning(
+                "placeoso returned %d bracket id(s) but %d were sent — "
+                "subsequent cancel/modify on missing children won't be "
+                "replicated. Response body for calibration: %s",
+                len(bracket_ids), len(brackets), body,
+            )
+
+        oco_id = body.get("ocoId")
+        logger.info(
+            "✓ Tradovate bracket placed — entry=%s brackets=%s oco=%s",
+            entry_id, bracket_ids, oco_id,
+        )
+        return PlacedBracket(
+            entry_order_id=int(entry_id),
+            bracket_ids=bracket_ids,
+            oco_id=int(oco_id) if oco_id is not None else None,
+            raw=body,
+        )
 
     # ------------------------------------------------------------------ #
     #  Order cancellation                                                 #

@@ -46,6 +46,7 @@ from ..brokers.tradovate import TradovateClient
 from ..config import Config
 from ..replicator import Replicator
 from .ibkr_parser import (
+    IbkrBracket,
     IbkrOrder,
     IbkrOrderCancel,
     IbkrOrderModify,
@@ -56,7 +57,7 @@ from .ibkr_parser import (
     parse_ibkr_cancel,
     parse_ibkr_modify,
     parse_ibkr_order,
-    parse_new_order_response_id,
+    parse_new_order_response_ids,
 )
 
 
@@ -80,12 +81,13 @@ class TradeSyncAddon:
         self._tradovate = tradovate
         self._resolver = resolver
         self._replicator = replicator
-        # Stash cOID per flow so that when the response comes back we
-        # can bind cOID → IBKR order_id. Mitmproxy guarantees one
-        # request/response pair per HTTPFlow, so a regular dict keyed
-        # by id(flow) is fine; we still clean up after response to
-        # avoid unbounded growth.
-        self._coid_by_flow: dict[int, str] = {}
+        # Stash the list of cOIDs (in body order) per flow so that
+        # when the response comes back we can bind each cOID → IBKR
+        # order_id. Brackets produce multiple cOIDs per flow.
+        # Mitmproxy guarantees one request/response pair per HTTPFlow,
+        # so a regular dict keyed by id(flow) is fine; we still clean
+        # up after response to avoid unbounded growth.
+        self._coids_by_flow: dict[int, list] = {}
         self._coid_lock = threading.Lock()
 
         logger.info("TradeSyncAddon active — listening for IBKR orders on %s",
@@ -141,28 +143,46 @@ class TradeSyncAddon:
 
     def _handle_new_order_request(self, flow: http.HTTPFlow) -> None:
         try:
-            order = parse_ibkr_order(flow)
+            parsed = parse_ibkr_order(flow)
         except UnsupportedOrderError as e:
             logger.warning("Skipping unparseable IBKR order: %s", e)
             return
 
-        logger.info(
-            "📥 IBKR new order: %s %d %s @ conid=%d type=%s "
-            "price=%s aux=%s tif=%s cOID=%s",
-            order.side, order.quantity, order.account_id,
-            order.conid, order.order_type,
-            order.price, order.aux_price, order.tif, order.cOID,
-        )
+        # Collect the cOIDs in body order so the response hook can
+        # bind each one to its IBKR-assigned order_id.
+        if isinstance(parsed, IbkrBracket):
+            coids = [parsed.entry.cOID] + [c.cOID for c in parsed.children]
+            child_summary = ", ".join(
+                f"{c.order_type}@{c.price or c.aux_price}"
+                for c in parsed.children
+            )
+            logger.info(
+                "📥 IBKR new bracket: %s %d %s @ conid=%d entry=%s%s "
+                "+ %d exit(s) [%s] cOIDs=%s",
+                parsed.entry.side, parsed.entry.quantity,
+                parsed.entry.account_id, parsed.entry.conid,
+                parsed.entry.order_type,
+                f"@{parsed.entry.price}" if parsed.entry.price else "",
+                len(parsed.children), child_summary, coids,
+            )
+            label = f"replicate-bracket-cOID-{parsed.entry.cOID}"
+        else:
+            coids = [parsed.cOID]
+            logger.info(
+                "📥 IBKR new order: %s %d %s @ conid=%d type=%s "
+                "price=%s aux=%s tif=%s cOID=%s",
+                parsed.side, parsed.quantity, parsed.account_id,
+                parsed.conid, parsed.order_type,
+                parsed.price, parsed.aux_price, parsed.tif, parsed.cOID,
+            )
+            label = f"replicate-new-cOID-{parsed.cOID}"
 
-        # Stash cOID so the response hook can finish the mapping.
-        if order.cOID:
+        coids = [c for c in coids if c]
+        if coids:
             with self._coid_lock:
-                self._coid_by_flow[id(flow)] = order.cOID
+                self._coids_by_flow[id(flow)] = coids
 
-        self._spawn(
-            self._replicator.replicate_new, order,
-            label=f"replicate-new-cOID-{order.cOID}",
-        )
+        self._spawn(self._replicator.replicate_new, parsed, label=label)
 
     def _handle_cancel_request(self, flow: http.HTTPFlow) -> None:
         try:
@@ -203,24 +223,35 @@ class TradeSyncAddon:
     # ------------------------------------------------------------------ #
 
     def _handle_new_order_response(self, flow: http.HTTPFlow) -> None:
-        # Recover the cOID we stashed on the request side.
+        # Recover the list of cOIDs we stashed on the request side.
         with self._coid_lock:
-            coid = self._coid_by_flow.pop(id(flow), None)
-        if not coid:
+            request_coids = self._coids_by_flow.pop(id(flow), None) or []
+        pairs = parse_new_order_response_ids(flow)
+        if not pairs:
+            if request_coids:
+                logger.warning(
+                    "IBKR new-order response had no order_id(s) we "
+                    "recognise — future cancel/modify on cOID(s) %s "
+                    "won't be replicated. Status=%s Body[:300]=%r",
+                    request_coids,
+                    flow.response.status_code if flow.response else None,
+                    (flow.response.content or b"")[:300] if flow.response else b"",
+                )
             return
-        ibkr_order_id = parse_new_order_response_id(flow)
-        if not ibkr_order_id:
-            logger.warning(
-                "IBKR new-order response had no order_id we recognise — "
-                "future cancel/modify on cOID=%s won't be replicated. "
-                "Status=%s Body[:200]=%r",
-                coid,
-                flow.response.status_code if flow.response else None,
-                (flow.response.content or b"")[:200] if flow.response else b"",
-            )
-            return
-        self._replicator.register_ibkr_id(coid, ibkr_order_id)
-        logger.info("🔗 Bound cOID=%s ↔ IBKR id=%s", coid, ibkr_order_id)
+        for idx, (resp_coid, ibkr_id) in enumerate(pairs):
+            # Prefer cOID echoed in the response; fall back to
+            # positional matching against the stashed request order.
+            coid = resp_coid or (request_coids[idx]
+                                 if idx < len(request_coids) else None)
+            if not coid:
+                logger.warning(
+                    "IBKR response leg %d has IBKR id=%s but we can't "
+                    "resolve which cOID it belongs to — cancel/modify "
+                    "on that leg won't replicate.", idx, ibkr_id,
+                )
+                continue
+            self._replicator.register_ibkr_id(coid, ibkr_id)
+            logger.info("🔗 Bound cOID=%s ↔ IBKR id=%s", coid, ibkr_id)
 
     # ------------------------------------------------------------------ #
     #  Background dispatch                                                #

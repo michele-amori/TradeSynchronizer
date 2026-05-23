@@ -24,6 +24,7 @@ from typing import Optional
 
 from .brokers.ibkr import IbkrContractResolver, ContractResolutionError
 from .brokers.tradovate import (
+    PlacedBracket,
     PlacedOrder,
     TradovateClient,
     TradovateOrderError,
@@ -31,7 +32,13 @@ from .brokers.tradovate import (
 )
 from .config import Config
 from .order_map import OrderMap, default_store_path
-from .proxy.ibkr_parser import IbkrOrder, IbkrOrderCancel, IbkrOrderModify
+from .proxy.ibkr_parser import (
+    IbkrBracket,
+    IbkrBracketChild,
+    IbkrOrder,
+    IbkrOrderCancel,
+    IbkrOrderModify,
+)
 from .symbols.converter import convert_to_tradovate_format
 
 
@@ -100,16 +107,19 @@ class Replicator:
     #  New-order replication                                              #
     # ================================================================== #
 
-    def replicate_new(self, ibkr_order: IbkrOrder) -> ReplicationResult:
+    def replicate_new(self, parsed) -> ReplicationResult:
         """
-        Apply policy, map fields, submit the order to Tradovate,
-        and register the cOID → Tradovate orderId mapping so a later
+        Apply policy, map fields, submit the order to Tradovate, and
+        register the cOID → Tradovate orderId mapping so a later
         cancel/modify on this IBKR order can be replicated too.
 
-        Never raises.
+        Accepts either an `IbkrOrder` (single-leg) or an `IbkrBracket`
+        (entry + 1..2 OCO-linked exits). Never raises.
         """
         try:
-            return self._replicate_new_inner(ibkr_order)
+            if isinstance(parsed, IbkrBracket):
+                return self._replicate_bracket_inner(parsed)
+            return self._replicate_new_inner(parsed)
         except Exception as e:
             logger.exception("Unexpected replicator failure: %s", e)
             return ReplicationResult(
@@ -208,6 +218,125 @@ class Replicator:
             success=True, skipped=False,
             reason=f"Replicated to Tradovate orderId={placed.order_id}",
             order=placed,
+        )
+
+    # ================================================================== #
+    #  Bracket replication                                                #
+    # ================================================================== #
+
+    def _replicate_bracket_inner(
+        self, bracket: IbkrBracket
+    ) -> ReplicationResult:
+        entry = bracket.entry
+        children = bracket.children
+
+        # ── Policy: account filter ─────────────────────────────────── #
+        watched = self._cfg.ibkr_watched_accounts
+        if watched and entry.account_id not in watched:
+            return ReplicationResult(
+                success=False, skipped=True,
+                reason=f"IBKR account {entry.account_id} not in watch list",
+            )
+
+        # NOTE: SKIP_PROTECTIVE_STOPS deliberately does NOT apply to
+        # brackets. The stop-loss child here is part of a coordinated
+        # bracket and must be replicated together with the entry and
+        # take-profit to keep the Tradovate position protected.
+
+        # Reserve slots in the map for every leg, so even a racy fast
+        # cancel can find a cOID.
+        for leg_coid in [entry.cOID] + [c.cOID for c in children]:
+            if leg_coid:
+                self._order_map.add_pending(leg_coid)
+
+        # ── Symbol resolution ──────────────────────────────────────── #
+        try:
+            ibkr_symbol = self._resolver.resolve_symbol(entry.conid)
+        except ContractResolutionError as e:
+            return ReplicationResult(
+                success=False, skipped=False,
+                reason=f"Could not resolve conid={entry.conid}: {e}",
+            )
+        tradovate_symbol = convert_to_tradovate_format(ibkr_symbol)
+        logger.info("Bracket symbol map: conid=%d → IBKR='%s' → Tradovate='%s'",
+                    entry.conid, ibkr_symbol, tradovate_symbol)
+
+        try:
+            contract_id = self._tradovate.get_contract_id(tradovate_symbol)
+        except TradovateOrderError as e:
+            return ReplicationResult(
+                success=False, skipped=False,
+                reason=f"Tradovate /contract/find failed for "
+                       f"'{tradovate_symbol}': {e}",
+            )
+
+        # ── Entry field mapping ────────────────────────────────────── #
+        entry_action = _ACTION_MAP[entry.side]
+        if self._cfg.replication_mode == "market":
+            entry_tv_type = "Market"
+            entry_limit = None
+            entry_stop = None
+        else:
+            entry_tv_type = _ORDER_TYPE_MAP[entry.order_type]
+            entry_limit = (entry.price
+                           if entry_tv_type in ("Limit", "StopLimit") else None)
+            entry_stop = (entry.aux_price
+                          if entry_tv_type in ("Stop", "StopLimit") else None)
+        entry_tif = _TIF_MAP.get(entry.tif, "Day")
+
+        # ── Child legs payload ─────────────────────────────────────── #
+        bracket_payloads: list = []
+        for child in children:
+            child_tv_type = _ORDER_TYPE_MAP[child.order_type]
+            bracket_payloads.append({
+                "action":      _ACTION_MAP[child.side],
+                "order_type":  child_tv_type,
+                "qty":         child.quantity,
+                "limit_price": child.price
+                    if child_tv_type in ("Limit", "StopLimit") else None,
+                "stop_price":  child.aux_price
+                    if child_tv_type in ("Stop", "StopLimit") else None,
+                "tif":         _TIF_MAP.get(child.tif, "Day"),
+            })
+
+        # ── Submit ─────────────────────────────────────────────────── #
+        try:
+            placed: PlacedBracket = self._tradovate.place_bracket(
+                tradovate_symbol=tradovate_symbol,
+                contract_id=contract_id,
+                entry_action=entry_action,
+                entry_qty=entry.quantity,
+                entry_order_type=entry_tv_type,
+                entry_limit_price=entry_limit,
+                entry_stop_price=entry_stop,
+                entry_tif=entry_tif,
+                brackets=bracket_payloads,
+            )
+        except (TradovateOrderError, ValueError) as e:
+            return ReplicationResult(
+                success=False, skipped=False,
+                reason=f"Tradovate placeoso failed: {e}",
+            )
+
+        # Register one map entry per leg so any leg can be cancelled
+        # or modified independently later.
+        if entry.cOID:
+            self._order_map.set_tradovate_id(entry.cOID, placed.entry_order_id)
+        for child, tv_id in zip(children, placed.bracket_ids):
+            if child.cOID:
+                self._order_map.set_tradovate_id(child.cOID, tv_id)
+
+        child_summary = ", ".join(
+            f"{c.order_type}@{c.price or c.aux_price}"
+            for c in children
+        ) or "(none)"
+        return ReplicationResult(
+            success=True, skipped=False,
+            reason=(
+                f"Replicated bracket: entry orderId={placed.entry_order_id} "
+                f"+ {len(placed.bracket_ids)} exit(s) "
+                f"[{child_summary}] on Tradovate (ocoId={placed.oco_id})"
+            ),
         )
 
     # ================================================================== #

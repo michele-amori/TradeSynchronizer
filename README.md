@@ -251,12 +251,33 @@ open. Successful cancels delete their entry; `OrderNotFound` from
 Tradovate (the order already filled or was cancelled out-of-band)
 is logged as a skip and the map entry is tidied up.
 
+### Bracket / OCO orders
+
+A bracket order (entry + take-profit + stop-loss, OCO-linked)
+arrives as a multi-leg `orders` array where the exit legs carry
+`parentId` referencing the entry's `cOID`. The parser detects that
+structure and the replicator forwards the whole group to
+Tradovate's `/order/placeoso` (Order Sends OCO) — entry as the
+parent, the two exits as `bracket1` / `bracket2`. After placement
+each leg gets its own entry in the order map, so cancelling or
+modifying any individual leg from TradingView later (e.g. raising
+the take-profit price) propagates to the matching Tradovate leg.
+
+`SKIP_PROTECTIVE_STOPS` does NOT apply to bracket children — the
+stop-loss leg of a bracket is part of the coordinated structure and
+gets replicated together with entry + TP regardless of that flag.
+
+**Empirical disclaimer.** The exact field names of Tradovate's
+`placeoso` response (`oso1Id` / `bracket1Id` / `orderIds[]`) and
+of IBKR's multi-leg POST response are educated guesses based on
+common API patterns — not yet verified against live traffic. On
+the first real bracket replication, expect either a clean success
+or a clearly logged failure: the full Tradovate response body is
+dumped on any error so the parser can be calibrated quickly.
+
 ## What it does NOT do
 
 - **Does not place orders directly on prop-firm accounts**. That's
   TradeSyncer's job; this tool only feeds its LEADER account.
-- **Does not replicate bracket/OCO legs**. If a future build needs
-  them, see `mytradingguardMacOs/proxy/addon.py` for the
-  multi-leg pattern.
 - **Does not run on Linux / Windows out of the box**. The keychain
   trust command is macOS-specific; everything else is portable.
