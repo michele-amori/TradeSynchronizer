@@ -89,11 +89,19 @@ class IbkrContractResolver:
                 self._bearer_token = token
                 logger.debug("IBKR bearer token captured (len=%d)", len(token))
 
-    def observe_contract_info(self, path: str, response_body: bytes) -> None:
+    def observe_contract_info(self, path: str, response_body: bytes,
+                              *, on_new_symbol=None) -> None:
         """
         Inspect `/v1/tv/iserver/contract/{conid}/info` responses and
         cache the resulting symbol. Called from the addon's response()
         hook for IBKR flows; silent on parse failure.
+
+        on_new_symbol: optional callback fired (synchronously, in
+        the caller's thread) when a previously-unknown conid is
+        observed. Used by the addon to launch a background
+        pre-resolve of the Tradovate contract_id so the FIRST order
+        on this symbol doesn't pay for the /contract/find round-
+        trip (~50-150ms saved).
         """
         m = _INFO_PATH_RE.match(path)
         if m is None:
@@ -110,10 +118,20 @@ class IbkrContractResolver:
             return
 
         symbol = _extract_symbol(data)
-        if symbol:
-            with self._lock:
-                self._symbol_cache[conid] = symbol
+        if not symbol:
+            return
+
+        with self._lock:
+            already_known = conid in self._symbol_cache
+            self._symbol_cache[conid] = symbol
+
+        if not already_known:
             logger.info("IBKR contract observed: conid=%d → %s", conid, symbol)
+            if on_new_symbol is not None:
+                try:
+                    on_new_symbol(symbol)
+                except Exception as e:
+                    logger.debug("on_new_symbol callback raised: %s", e)
 
     # ------------------------------------------------------------------ #
     #  Active resolution                                                  #

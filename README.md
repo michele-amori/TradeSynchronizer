@@ -318,6 +318,47 @@ When the first replicated trades have been verified to work
 end-to-end, untick the checkbox (or set `VERBOSE_TROUBLESHOOTING=false`
 in `.env`) and restart the engines: logs drop back to normal.
 
+## Shadow mode (no Tradovate credentials yet)
+
+If you haven't registered the app at `trader.tradovate.com → API
+Access` yet — or you just want to validate the IBKR-side
+interception before going live — TradeSynchronizer happily boots
+in **shadow mode**: it intercepts every IBKR order, parses it, and
+logs in detail what it WOULD have sent to Tradovate, without
+actually placing any Tradovate orders.
+
+Shadow mode kicks in automatically whenever ANY of these is
+missing or empty:
+
+* `APP_CID` / `APP_SEC` in `tradesync/_app_credentials.py`
+* `TRADOVATE_USERNAME` / `TRADOVATE_PASSWORD` in the per-engine
+  `.env.live` / `.env.demo`
+
+The startup log makes the state unambiguous:
+
+    🔮 SHADOW MODE — Tradovate credentials are not configured.
+    The proxy will intercept and log every IBKR order, but no
+    real Tradovate orders will be placed.
+
+Every Tradovate-bound call that the replicator would have made
+gets logged with a `🔮 SHADOW:` prefix and the full would-have-
+sent payload:
+
+    🔮 SHADOW: would GET /contract/find?name=MESH6 → returning fake contract_id=9000001
+    🔮 SHADOW: would POST /order/placeorder → returning fake order_id=9000002
+        payload: {"accountId": 999999, "action": "Buy", "symbol": "MESH6", "contractId": 9000001, …}
+    🔮 SHADOW: would POST /order/cancelorder id=9000002 → pretending it succeeded
+
+The fake ids start at 9_000_000 (visibly distinct from real
+Tradovate ids) and increment monotonically so multiple orders
+don't collide in the OrderMap or in the log.
+
+To exit shadow mode: register the app at Tradovate, fill in
+`_app_credentials.py` and the relevant `.env.<env>` file, then
+restart the engine. The TradovateClient detects the credentials
+on its next `connect()` and switches to live replication
+automatically — no code change, no flag to flip.
+
 ## Troubleshooting
 
 | Problem | Fix |

@@ -976,24 +976,15 @@ class TradeSyncApp:
         return None
 
     def _validate_env(self, env: str) -> Optional[str]:
-        """Tighter validation, run before starting a specific engine."""
-        # App credentials live outside the dotenv now; check them
-        # separately so the user gets a single clear error instead
-        # of a "missing username" + "missing cid" combo.
-        if not has_app_credentials():
-            return (
-                "Tradovate application credentials are not configured. "
-                "Create tradesync/_app_credentials.py from the .example "
-                "template and fill in APP_CID + APP_SEC — see the "
-                "General tab banner for the one-time walkthrough."
-            )
-        required = ["TRADOVATE_USERNAME", "TRADOVATE_PASSWORD"]
-        missing = [k for k in required
-                   if not self.store.per_env[env].get(k)]
-        if missing:
-            return (f"{env.upper()} engine cannot start — missing: "
-                    + ", ".join(missing) +
-                    f". Fill them in the '{env.capitalize()}' tab.")
+        """Tighter validation, run before starting a specific engine.
+
+        Missing _app_credentials.py OR missing username/password DO
+        NOT block the engine — the TradovateClient handles those
+        cases in shadow mode: it logs everything it WOULD have sent
+        to Tradovate without actually placing any orders, which is
+        the right behaviour during early calibration of the IBKR-
+        side interception. The Log tab will display a clear SHADOW
+        MODE banner at engine startup."""
         return self._validate_all()
 
     # ── store ↔ widgets sync ──────────────────────────────────────── #

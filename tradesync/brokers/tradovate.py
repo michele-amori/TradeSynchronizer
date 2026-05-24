@@ -106,12 +106,26 @@ class TradovateClient:
         self._pinned_account_id = pinned_account_id
         self._device_id = device_id or str(uuid.uuid4())
 
+        # Shadow mode: when ANY of the required credentials is empty
+        # we skip every HTTP call to Tradovate and just log what we
+        # would have sent. The proxy + IBKR-side parsing keep working
+        # end-to-end, so the user can validate the interception path
+        # against real TradingView traffic BEFORE registering an app
+        # at trader.tradovate.com. Flipped to False the moment the
+        # user fills in cid + sec + username + password.
+        self._shadow_mode: bool = not all((cid, sec, username, password))
+
         # State populated by connect()
         self._access_token: Optional[str] = None
         self._md_access_token: Optional[str] = None
         self._expiration: Optional[datetime] = None
         self._account_id: Optional[int] = None
         self._user_id: Optional[int] = None
+        # Deterministic fake-order-id counter for shadow-mode replies.
+        # Starts at 9_000_000 to be visually distinct from real
+        # Tradovate ids (which are typically much smaller) when
+        # they appear in logs / OrderMap dumps.
+        self._shadow_id_counter: int = 9_000_000
 
         # Cache: tradovate_symbol → contract_id
         self._contract_id_cache: dict[str, int] = {}
@@ -119,6 +133,13 @@ class TradovateClient:
         self._lock = threading.Lock()
         self._http = requests.Session()
         self._http.headers.update({"Accept": "application/json"})
+        # TCP_NODELAY: NOT mounted explicitly because urllib3 already
+        # sets it on every connection via
+        # HTTPSConnection.default_socket_options — confirmed by
+        # introspection at the urllib3 version pinned in
+        # requirements.txt. If a future urllib3 ever drops it from
+        # the default, we'd add a custom HTTPAdapter here to force
+        # it back on. Until then, an explicit mount is cargo cult.
 
     # ------------------------------------------------------------------ #
     #  Public properties                                                  #
@@ -145,7 +166,32 @@ class TradovateClient:
         Obtain an access token via /auth/accesstokenrequest, then
         resolve the LEADER account ID (either from `pinned_account_id`
         or from /account/list).
+
+        In SHADOW MODE (any required credential missing) we skip the
+        HTTP call entirely, log a one-time banner, and pretend the
+        connection succeeded. Downstream code that asks `.connected`
+        gets True; downstream methods (place_order, cancel, modify,
+        get_contract_id) detect _shadow_mode and short-circuit to
+        their own log-and-return-fake paths.
         """
+        if self._shadow_mode:
+            logger.warning(
+                "🔮 SHADOW MODE — Tradovate credentials are not configured. "
+                "The engine will intercept and parse IBKR orders and log "
+                "what it WOULD have sent to Tradovate, but no actual "
+                "Tradovate HTTP calls will be made. Fill in cid+sec "
+                "(_app_credentials.py) and username+password (.env.%s) "
+                "to switch to live replication.",
+                "live" if "live" in self._api_url else "demo",
+            )
+            # Plausible sentinels so .connected returns True and the
+            # rest of the code doesn't have to special-case shadow.
+            self._access_token = "<shadow>"
+            self._account_id = self._pinned_account_id or 999_999
+            self._user_id = 999_999
+            self._expiration = datetime.now(tz=timezone.utc) + timedelta(days=365)
+            return
+
         credentials = {
             "name":       self._username,
             "password":   self._password,
@@ -198,6 +244,21 @@ class TradovateClient:
             logger.info("Resolved Tradovate accountId=%s from /account/list",
                         self._account_id)
 
+        # Pre-warm the TCP+TLS connection so the FIRST place_order
+        # doesn't pay for the handshake (TCP three-way ~30ms +
+        # TLS 1.2 full handshake ~60-100ms = up to ~130ms saved
+        # off the first trade of the session). The /account/list
+        # call above ALREADY warmed the connection in the unpinned
+        # path; we only need this for the pinned-account path,
+        # which would otherwise place its first order on a cold
+        # socket. Issue a cheap GET; failures here are non-fatal
+        # — they just mean the first real order pays the handshake.
+        if self._pinned_account_id:
+            try:
+                self._http.get(f"{self._api_url}/account/list", timeout=3)
+            except requests.RequestException as e:
+                logger.debug("Warmup ping failed (non-fatal): %s", e)
+
     def _fetch_first_account_id(self) -> int:
         resp = self._authed_get("/account/list")
         if not isinstance(resp, list) or not resp:
@@ -221,13 +282,28 @@ class TradovateClient:
             accountType  → "Customer" | "Hedger" | …
             legalStatus  → "Individual" | "Corporation" | …
             active       → bool
+
+        In shadow mode returns an empty list — the GUI account
+        picker will show 'no accounts available' and the user can
+        still proceed with the engine for IBKR-side validation.
         """
+        if self._shadow_mode:
+            logger.info("🔮 SHADOW: would GET /account/list → []")
+            return []
         resp = self._authed_get("/account/list")
         if not isinstance(resp, list):
             raise TradovateAuthError(
                 f"/account/list returned unexpected shape: {type(resp).__name__}"
             )
         return resp
+
+    def _next_shadow_id(self) -> int:
+        """Generate a deterministic-monotonic fake id for shadow-
+        mode replies. Starts at 9_000_000 to be visually distinct
+        from real Tradovate ids in logs/OrderMap dumps."""
+        with self._lock:
+            self._shadow_id_counter += 1
+            return self._shadow_id_counter
 
     def _ensure_fresh_token(self) -> None:
         """
@@ -292,6 +368,15 @@ class TradovateClient:
             cached = self._contract_id_cache.get(tradovate_symbol)
             if cached:
                 return cached
+
+        if self._shadow_mode:
+            fake_id = self._next_shadow_id()
+            logger.info("🔮 SHADOW: would GET /contract/find?name=%s "
+                        "→ returning fake contract_id=%d",
+                        tradovate_symbol, fake_id)
+            with self._lock:
+                self._contract_id_cache[tradovate_symbol] = fake_id
+            return fake_id
 
         self._ensure_fresh_token()
 
@@ -389,6 +474,14 @@ class TradovateClient:
         logger.debug("→ POST %s/order/placeorder\n    payload: %s",
                      self._api_url, payload)
 
+        if self._shadow_mode:
+            fake_id = self._next_shadow_id()
+            logger.info("🔮 SHADOW: would POST /order/placeorder → "
+                        "returning fake order_id=%d", fake_id)
+            return PlacedOrder(order_id=fake_id,
+                               raw={"shadow": True, "orderId": fake_id,
+                                    "would_have_sent": payload})
+
         try:
             resp = self._http.post(
                 f"{self._api_url}/order/placeorder",
@@ -451,6 +544,15 @@ class TradovateClient:
             raise TradovateOrderError("Not connected — call connect() first")
         if not isinstance(order_id, int) or order_id <= 0:
             raise ValueError(f"order_id must be a positive int, got {order_id!r}")
+
+        if self._shadow_mode:
+            # Reconciliation never runs in shadow (skipped at
+            # Replicator level) so this should be unreachable, but
+            # be defensive: claim 'Working' so any straggler caller
+            # doesn't prune the map.
+            logger.debug("🔮 SHADOW: get_order_status(%d) → 'Working' "
+                         "(no real Tradovate state to query)", order_id)
+            return "Working"
 
         self._ensure_fresh_token()
         logger.debug("→ GET %s/order/item?id=%d", self._api_url, order_id)
@@ -581,6 +683,19 @@ class TradovateClient:
         logger.debug("→ POST %s/order/placeoso\n    payload: %s",
                      self._api_url, payload)
 
+        if self._shadow_mode:
+            entry_id = self._next_shadow_id()
+            child_ids = [self._next_shadow_id() for _ in brackets]
+            logger.info("🔮 SHADOW: would POST /order/placeoso → "
+                        "fake entry_id=%d, bracket_ids=%s",
+                        entry_id, child_ids)
+            return PlacedBracket(
+                entry_order_id=entry_id,
+                bracket_ids=child_ids,
+                oco_id=self._next_shadow_id() if len(child_ids) > 1 else None,
+                raw={"shadow": True, "would_have_sent": payload},
+            )
+
         try:
             resp = self._http.post(
                 f"{self._api_url}/order/placeoso",
@@ -668,6 +783,11 @@ class TradovateClient:
         if not isinstance(order_id, int) or order_id <= 0:
             raise ValueError(f"order_id must be a positive int, got {order_id!r}")
 
+        if self._shadow_mode:
+            logger.info("🔮 SHADOW: would POST /order/cancelorder id=%d "
+                        "→ pretending it succeeded", order_id)
+            return {"shadow": True, "orderId": order_id, "ok": True}
+
         self._ensure_fresh_token()
 
         payload = {"orderId": int(order_id)}
@@ -723,6 +843,13 @@ class TradovateClient:
                 "modify_order called with nothing to change — pass at least "
                 "one of qty / limit_price / stop_price / tif"
             )
+
+        if self._shadow_mode:
+            logger.info("🔮 SHADOW: would POST /order/modifyorder id=%d "
+                        "qty=%s limit=%s stop=%s tif=%s → pretending it "
+                        "succeeded", order_id, qty, limit_price,
+                        stop_price, tif)
+            return {"shadow": True, "orderId": order_id, "ok": True}
 
         self._ensure_fresh_token()
 
@@ -834,3 +961,5 @@ def _parse_iso(value) -> Optional[datetime]:
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+

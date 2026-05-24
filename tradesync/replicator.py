@@ -643,6 +643,14 @@ class Replicator:
         stats = {"checked": 0, "kept": 0, "pruned": 0,
                  "errors": 0, "skipped_no_tv_id": 0}
 
+        # In shadow mode there's no real Tradovate to ask, and the
+        # map's tradovate_ids are all fake-shadow placeholders.
+        # Skip silently — nothing to reconcile against.
+        if getattr(self._cfg, "is_shadow_mode", False):
+            logger.info("Reconciliation skipped (shadow mode — no real "
+                        "Tradovate state to reconcile against).")
+            return stats
+
         # Snapshot the cOIDs up front: we'll mutate the map inside
         # the loop and don't want to iterate over a moving target.
         # Access the internal _by_coid directly under the lock-safe

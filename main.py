@@ -118,7 +118,18 @@ def _build_addon(cfg: Optional[Config] = None) -> TradeSyncAddon:
 
     log.info("TradeSynchronizer starting up")
     log.info("Tradovate env=%s, user=%s, pinned_account=%s",
-             cfg.tradovate_env, cfg.tradovate_username, cfg.tradovate_acct_id)
+             cfg.tradovate_env, cfg.tradovate_username or "(not set)",
+             cfg.tradovate_acct_id)
+    if cfg.is_shadow_mode:
+        log.warning(
+            "🔮 SHADOW MODE — Tradovate credentials are not yet "
+            "configured. The proxy will intercept and log every IBKR "
+            "order, but no real Tradovate orders will be placed. "
+            "Useful for validating the IBKR-side interception before "
+            "registering an app at trader.tradovate.com → API Access. "
+            "Fill in _app_credentials.py + .env.%s to switch to live "
+            "replication.", cfg.tradovate_env,
+        )
     preflight.run_all()
 
     tradovate = TradovateClient(

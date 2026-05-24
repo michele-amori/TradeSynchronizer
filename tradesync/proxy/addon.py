@@ -42,7 +42,8 @@ import threading
 from mitmproxy import http
 
 from ..brokers.ibkr import IbkrContractResolver
-from ..brokers.tradovate import TradovateClient
+from ..brokers.tradovate import TradovateClient, TradovateOrderError
+from ..symbols.converter import convert_to_tradovate_format
 from ..config import Config
 from ..notify import notify
 from ..replicator import Replicator
@@ -136,12 +137,19 @@ class TradeSyncAddon:
         if flow.response is None:
             return
 
-        # Conid → symbol passive cache (existing behaviour).
+        # Conid → symbol passive cache (existing behaviour). On a
+        # NEW conid (first observation), kick off a background
+        # /contract/find at Tradovate so the contract_id is in the
+        # cache by the time the user actually places the first
+        # order on this symbol — typically minutes later, since TV
+        # observes /info when the chart opens. Saves ~50-150ms off
+        # the first-order critical path.
         if (flow.response.status_code == 200
                 and flow.request.method == "GET"):
             self._resolver.observe_contract_info(
                 flow.request.path,
                 flow.response.content,
+                on_new_symbol=self._pre_resolve_tradovate_contract,
             )
             logger.debug("(observed contract info from %s — status %d, %d bytes)",
                          flow.request.path,
@@ -154,6 +162,49 @@ class TradeSyncAddon:
                          flow.response.status_code,
                          (flow.response.content or b"")[:600])
             self._handle_new_order_response(flow)
+
+    # ------------------------------------------------------------------ #
+    #  Background contract_id pre-resolution                              #
+    # ------------------------------------------------------------------ #
+
+    def _pre_resolve_tradovate_contract(self, ibkr_symbol: str) -> None:
+        """Spawn a daemon thread that pre-fetches the Tradovate
+        contract_id for this symbol so it lands in TradovateClient's
+        cache before any order arrives. Best-effort and silent on
+        failure — the first real order will simply re-resolve.
+
+        Called from the response hook the moment a NEW conid maps
+        to a symbol. That's almost always when TV first paints the
+        chart, minutes ahead of the user clicking BUY. By the time
+        the order POST hits this addon, `get_contract_id` is a
+        cache hit and the critical path drops by one round-trip
+        (50-150 ms in practice).
+
+        In shadow mode pre-resolve is a no-op: there's no real
+        Tradovate cache to warm up, and we'd just pollute the local
+        cache with fake-shadow ids that the first real order would
+        have to invalidate later anyway."""
+        if getattr(self._tradovate, "_shadow_mode", False):
+            logger.debug("shadow mode — skipping pre-resolve for %s",
+                         ibkr_symbol)
+            return
+
+        def warm():
+            try:
+                tv_symbol = convert_to_tradovate_format(ibkr_symbol)
+                self._tradovate.get_contract_id(tv_symbol)
+                logger.debug("pre-resolved Tradovate contract_id for %s",
+                             tv_symbol)
+            except (TradovateOrderError, Exception) as e:
+                # Pre-resolution is opportunistic; a failure here
+                # just means the first real order eats the lookup.
+                logger.debug("pre-resolve for %s failed (non-fatal): %s",
+                             ibkr_symbol, e)
+        threading.Thread(
+            target=warm,
+            name=f"pre-resolve-{ibkr_symbol}",
+            daemon=True,
+        ).start()
 
     # ------------------------------------------------------------------ #
     #  Request handlers                                                   #

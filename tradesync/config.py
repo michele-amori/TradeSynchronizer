@@ -94,6 +94,17 @@ def has_app_credentials() -> bool:
     return True
 
 
+def load_app_credentials_or_empty() -> tuple[str, str]:
+    """Non-raising variant of load_app_credentials(). Returns
+    ("", "") when the credentials are missing, so the engine can
+    keep booting in shadow mode (intercept + log IBKR orders
+    without ever talking to Tradovate). Used by Config.load()."""
+    try:
+        return load_app_credentials()
+    except MissingAppCredentialsError:
+        return "", ""
+
+
 # Project root (the directory containing this package's parent).
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -186,6 +197,22 @@ class Config:
     def tradovate_api_url(self) -> str:
         return _TRADOVATE_BASE[self.tradovate_env]
 
+    @property
+    def is_shadow_mode(self) -> bool:
+        """True when any required Tradovate credential is missing.
+        In shadow mode TradovateClient skips all HTTP calls and
+        logs what it WOULD have sent, so the proxy can be validated
+        end-to-end against real TV+IBKR traffic without needing a
+        registered Tradovate app yet. Set automatically by
+        Config.load() when _app_credentials.py is absent/empty OR
+        when username/password aren't filled in."""
+        return not all((
+            self.tradovate_cid,
+            self.tradovate_sec,
+            self.tradovate_username,
+            self.tradovate_password,
+        ))
+
     @classmethod
     def load(cls) -> "Config":
         """
@@ -219,23 +246,17 @@ class Config:
             )
         _merge_into_environ(env)
 
-        # User credentials (per-env, in .env.<env>): username + password.
-        required = {
-            "TRADOVATE_USERNAME": os.getenv("TRADOVATE_USERNAME") or "",
-            "TRADOVATE_PASSWORD": os.getenv("TRADOVATE_PASSWORD") or "",
-        }
-        missing = [k for k, v in required.items() if not v]
-        if missing:
-            raise RuntimeError(
-                f"Missing required {env.upper()} user credential(s): "
-                + ", ".join(missing) +
-                f". Open TradeSynchronizer.app or edit {env_file} and "
-                f"fill them in."
-            )
+        # User credentials (per-env, in .env.<env>): username +
+        # password. ALLOWED to be empty — Config.is_shadow_mode will
+        # report True and the engine will skip Tradovate HTTP calls
+        # while still intercepting and logging every IBKR order.
+        username = os.getenv("TRADOVATE_USERNAME") or ""
+        password = os.getenv("TRADOVATE_PASSWORD") or ""
 
         # App credentials (shared across LIVE and DEMO, app-level):
         # cid + sec from the gitignored _app_credentials.py module.
-        cid, sec = load_app_credentials()
+        # Also allowed to be empty — same shadow-mode story.
+        cid, sec = load_app_credentials_or_empty()
 
         acct_id_raw = (os.getenv("TRADOVATE_ACCOUNT_ID") or "").strip()
         acct_id = int(acct_id_raw) if acct_id_raw else None
@@ -267,8 +288,8 @@ class Config:
             )
 
         return cls(
-            tradovate_username=required["TRADOVATE_USERNAME"],
-            tradovate_password=required["TRADOVATE_PASSWORD"],
+            tradovate_username=username,
+            tradovate_password=password,
             tradovate_app_id=os.getenv("TRADOVATE_APP_ID") or "TradeSynchronizer",
             tradovate_app_ver=os.getenv("TRADOVATE_APP_VERSION") or "1.0",
             tradovate_cid=cid,
