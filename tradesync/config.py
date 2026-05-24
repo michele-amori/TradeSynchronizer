@@ -19,12 +19,16 @@ over everything in the files.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from dotenv import dotenv_values
+
+
+logger = logging.getLogger("tradesync.config")
 
 
 class MissingAppCredentialsError(RuntimeError):
@@ -258,8 +262,55 @@ class Config:
         # Also allowed to be empty — same shadow-mode story.
         cid, sec = load_app_credentials_or_empty()
 
+        # TRADOVATE_ACCOUNT_ID is expected to be the NUMERIC Tradovate
+        # account id (e.g. 12345678) obtained from
+        # "Sign in & pick account" in the GUI — NOT the alphanumeric
+        # nickname some prop firms (Apex / TopStep / BlueGuardian etc.)
+        # expose as the public-facing account name. If a non-integer
+        # value is found here:
+        #   * In shadow mode: warn and treat it as unset. The shadow
+        #     TradovateClient never uses the real account id anyway
+        #     (returns 999_999 as a placeholder), so the user can
+        #     still boot and validate the IBKR-side interception
+        #     while they sort out the right value.
+        #   * Out of shadow mode: raise a clear error pointing at the
+        #     misconfiguration, so the user understands the
+        #     "Sign in & pick account" workflow.
         acct_id_raw = (os.getenv("TRADOVATE_ACCOUNT_ID") or "").strip()
-        acct_id = int(acct_id_raw) if acct_id_raw else None
+        acct_id: Optional[int]
+        if not acct_id_raw:
+            acct_id = None
+        else:
+            try:
+                acct_id = int(acct_id_raw)
+            except ValueError:
+                shadow_now = not all((
+                    cid, sec,
+                    os.getenv("TRADOVATE_USERNAME") or "",
+                    os.getenv("TRADOVATE_PASSWORD") or "",
+                ))
+                if shadow_now:
+                    logger.warning(
+                        "TRADOVATE_ACCOUNT_ID=%r is not a numeric id "
+                        "— ignoring (shadow mode). The numeric id is "
+                        "the one returned by Tradovate's /account/list "
+                        "endpoint, e.g. 12345678. Prop-firm nicknames "
+                        "like 'APEX-12345' or 'BGF46274' go in "
+                        "TRADOVATE_USERNAME instead, NOT here. Once "
+                        "credentials are configured, use the GUI's "
+                        "'Sign in & pick account' to populate this "
+                        "field with the right value.", acct_id_raw)
+                    acct_id = None
+                else:
+                    raise RuntimeError(
+                        f"TRADOVATE_ACCOUNT_ID={acct_id_raw!r} is not a "
+                        f"valid integer. This field expects the NUMERIC "
+                        f"Tradovate account id (e.g. 12345678), not the "
+                        f"alphanumeric nickname your prop firm shows you. "
+                        f"Open the GUI, go to the {env.capitalize()} "
+                        f"tab, click 'Sign in & pick account' and let "
+                        f"it auto-fill the right value."
+                    )
 
         replication_mode = (os.getenv("REPLICATION_MODE") or "mirror").lower()
         if replication_mode not in ("mirror", "market"):

@@ -202,5 +202,68 @@ class TestConfigShadowProperty(unittest.TestCase):
         self.assertTrue(self._cfg(tradovate_password="").is_shadow_mode)
 
 
+class TestNonNumericAccountIdHandling(unittest.TestCase):
+    """A user filling TRADOVATE_ACCOUNT_ID with a prop-firm nickname
+    (e.g. 'BGF46274' instead of 12345678) used to crash Config.load()
+    with a bare ValueError before the engine could even reach its
+    log setup. This regression test guarantees the resilient parse.
+
+    In shadow mode it's logged + dropped silently (None), so the user
+    can still validate IBKR interception without sorting out the
+    numeric id first. Out of shadow it raises a clear RuntimeError
+    that points at the GUI's 'Sign in & pick account' workflow."""
+
+    def _load(self, env_overrides):
+        """Run Config.load() with a controlled environment. Builds
+        a tmp project root with empty .env.demo so dotenv finds
+        the env file but doesn't override anything."""
+        import os, tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from tradesync.config import Config
+
+        base_env = {
+            "TRADOVATE_ENVIRONMENT": "demo",
+            "PROXY_LISTEN_PORT": "8081",
+            "REPLICATION_MODE": "mirror",
+            "SKIP_PROTECTIVE_STOPS": "true",
+        }
+        base_env.update(env_overrides)
+        # Wipe the real env's account-id so it doesn't leak through.
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, ".env.demo").write_text("")
+            with patch.dict(os.environ, base_env, clear=False), \
+                 patch("tradesync.config.PROJECT_ROOT", Path(tmp)):
+                return Config.load()
+
+    def test_non_numeric_acct_id_silently_dropped_in_shadow(self):
+        # Empty user creds → shadow mode
+        cfg = self._load({
+            "TRADOVATE_USERNAME": "",
+            "TRADOVATE_PASSWORD": "",
+            "TRADOVATE_ACCOUNT_ID": "BGF46274",
+        })
+        self.assertTrue(cfg.is_shadow_mode)
+        # The bad value got dropped, not propagated
+        self.assertIsNone(cfg.tradovate_acct_id)
+
+    def test_numeric_acct_id_works_in_shadow(self):
+        cfg = self._load({
+            "TRADOVATE_USERNAME": "",
+            "TRADOVATE_PASSWORD": "",
+            "TRADOVATE_ACCOUNT_ID": "12345678",
+        })
+        self.assertTrue(cfg.is_shadow_mode)
+        self.assertEqual(cfg.tradovate_acct_id, 12345678)
+
+    def test_empty_acct_id_works_in_shadow(self):
+        cfg = self._load({
+            "TRADOVATE_USERNAME": "",
+            "TRADOVATE_PASSWORD": "",
+            "TRADOVATE_ACCOUNT_ID": "",
+        })
+        self.assertIsNone(cfg.tradovate_acct_id)
+
+
 if __name__ == "__main__":
     unittest.main()
