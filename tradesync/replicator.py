@@ -17,7 +17,9 @@ gone through.
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -118,14 +120,23 @@ class Replicator:
         """
         try:
             if isinstance(parsed, IbkrBracket):
-                return self._replicate_bracket_inner(parsed)
-            return self._replicate_new_inner(parsed)
+                result = self._replicate_bracket_inner(parsed)
+            else:
+                result = self._replicate_new_inner(parsed)
         except Exception as e:
             logger.exception("Unexpected replicator failure: %s", e)
-            return ReplicationResult(
+            result = ReplicationResult(
                 success=False, skipped=False,
                 reason=f"Internal error: {e}",
             )
+        # Emit a structured DIVERGENCE event when we failed (and
+        # didn't merely skip-by-policy). The GUI parses these lines to
+        # render the per-env Sync-health panel; CLI mode just logs.
+        if not result.success and not result.skipped:
+            self._emit_divergence(parsed, kind=(
+                "bracket" if isinstance(parsed, IbkrBracket) else "new"
+            ), reason=result.reason)
+        return result
 
     # Back-compat alias for callers that still use the old name.
     replicate = replicate_new
@@ -362,13 +373,16 @@ class Replicator:
         """Look up the Tradovate orderId for the given IBKR order_id
         and call /order/cancelorder. Never raises."""
         try:
-            return self._replicate_cancel_inner(cancel)
+            result = self._replicate_cancel_inner(cancel)
         except Exception as e:
             logger.exception("Unexpected cancel failure: %s", e)
-            return ReplicationResult(
+            result = ReplicationResult(
                 success=False, skipped=False,
                 reason=f"Internal error during cancel: {e}",
             )
+        if not result.success and not result.skipped:
+            self._emit_divergence(cancel, kind="cancel", reason=result.reason)
+        return result
 
     def _replicate_cancel_inner(
         self, cancel: IbkrOrderCancel
@@ -427,13 +441,16 @@ class Replicator:
         """Look up the Tradovate orderId and call /order/modifyorder
         with the changed fields. Never raises."""
         try:
-            return self._replicate_modify_inner(modify)
+            result = self._replicate_modify_inner(modify)
         except Exception as e:
             logger.exception("Unexpected modify failure: %s", e)
-            return ReplicationResult(
+            result = ReplicationResult(
                 success=False, skipped=False,
                 reason=f"Internal error during modify: {e}",
             )
+        if not result.success and not result.skipped:
+            self._emit_divergence(modify, kind="modify", reason=result.reason)
+        return result
 
     def _replicate_modify_inner(
         self, modify: IbkrOrderModify
@@ -515,3 +532,74 @@ class Replicator:
                 f"(IBKR id={modify.ibkr_order_id}): {', '.join(parts) or '(none)'}"
             ),
         )
+
+    # ================================================================== #
+    #  Divergence emit                                                    #
+    # ================================================================== #
+
+    def _emit_divergence(self, parsed, *, kind: str, reason: str) -> None:
+        """
+        Log a structured `DIVERGENCE {json}` line describing a failed
+        replication. The GUI tails subprocess stdout, parses these
+        lines, and surfaces them in the per-env Sync-health panel.
+
+        In CLI mode (no GUI) the line still ends up in the rotating
+        log file, so the trader can review missed replications later.
+        """
+        payload = {
+            "ts":      time.time(),
+            "env":     self._cfg.tradovate_env,
+            "kind":    kind,
+            "reason":  reason,
+            "summary": self._format_divergence_summary(parsed),
+            "ref":     self._divergence_ref(parsed),
+        }
+        try:
+            line = json.dumps(payload, default=str)
+        except (TypeError, ValueError) as e:
+            line = json.dumps({
+                "ts": payload["ts"], "env": payload["env"],
+                "kind": kind, "reason": reason,
+                "summary": "(serialisation failed: " + str(e) + ")",
+                "ref": "",
+            })
+        logger.warning("DIVERGENCE %s", line)
+
+    @staticmethod
+    def _format_divergence_summary(parsed) -> str:
+        if isinstance(parsed, IbkrBracket):
+            e = parsed.entry
+            return (
+                f"BRACKET {e.side} {e.quantity} conid={e.conid} "
+                f"{e.order_type}"
+                + (f"@{e.price}" if e.price is not None else "")
+                + f" + {len(parsed.children)} exit(s)"
+            )
+        if isinstance(parsed, IbkrOrder):
+            return (
+                f"{parsed.side} {parsed.quantity} conid={parsed.conid} "
+                f"{parsed.order_type}"
+                + (f"@{parsed.price}" if parsed.price is not None else "")
+            )
+        if isinstance(parsed, IbkrOrderCancel):
+            return f"CANCEL ibkr_id={parsed.ibkr_order_id}"
+        if isinstance(parsed, IbkrOrderModify):
+            return (
+                f"MODIFY ibkr_id={parsed.ibkr_order_id}"
+                + (f" qty={parsed.quantity}" if parsed.quantity else "")
+                + (f" price={parsed.price}" if parsed.price else "")
+                + (f" stop={parsed.aux_price}" if parsed.aux_price else "")
+            )
+        return repr(parsed)
+
+    @staticmethod
+    def _divergence_ref(parsed) -> str:
+        """Best-effort identifier to cross-reference this divergence
+        with its cOID or IBKR id in the log."""
+        if isinstance(parsed, IbkrBracket):
+            return parsed.entry.cOID or ""
+        if isinstance(parsed, IbkrOrder):
+            return parsed.cOID or ""
+        if isinstance(parsed, (IbkrOrderCancel, IbkrOrderModify)):
+            return parsed.ibkr_order_id
+        return ""

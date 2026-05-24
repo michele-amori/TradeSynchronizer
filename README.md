@@ -284,6 +284,29 @@ the take-profit price) propagates to the matching Tradovate leg.
 stop-loss leg of a bracket is part of the coordinated structure and
 gets replicated together with entry + TP regardless of that flag.
 
+### When Tradovate rejects a replication
+
+If Tradovate refuses an order (insufficient margin, unknown symbol,
+rate limit, …) the divergence is surfaced in three places at once,
+so missing it requires actively ignoring all three:
+
+1. **Desktop notification** via `osascript` — a Notification Center
+   banner titled "TradeSynchronizer LIVE/DEMO: order rejected" with
+   the rejection reason. Survives in Notification Center for review
+   later if you were AFK.
+2. **Tab title** in the GUI gets a ⚠ suffix (e.g. `Live  ●  ⚠`) so
+   you see the warning from any tab. Combined with the running-dot
+   indicator, the four combinations are: clean, running, error,
+   running with error.
+3. **Sync-health panel** inside the Live/Demo tab shows a red
+   counter, the most recent failure summary, and an
+   "Acknowledge & clear" button. Acknowledging only resets the
+   indicator — it does NOT auto-recover the Tradovate position;
+   reconcile manually first if the divergence matters.
+
+The structured `DIVERGENCE {json}` event is also persisted to the
+rotating log file, so you can audit failures days later.
+
 **Empirical disclaimer.** The exact field names of Tradovate's
 `placeoso` response (`oso1Id` / `bracket1Id` / `orderIds[]`) and
 of IBKR's multi-leg POST response are educated guesses based on

@@ -44,6 +44,7 @@ from mitmproxy import http
 from ..brokers.ibkr import IbkrContractResolver
 from ..brokers.tradovate import TradovateClient
 from ..config import Config
+from ..notify import notify
 from ..replicator import Replicator
 from .ibkr_parser import (
     IbkrBracket,
@@ -259,6 +260,8 @@ class TradeSyncAddon:
 
     def _spawn(self, fn, payload, *, label: str) -> None:
         """Run `fn(payload)` on a daemon thread and log its result."""
+        env_label = self._cfg.tradovate_env.upper()
+
         def runner():
             try:
                 result = fn(payload)
@@ -271,6 +274,16 @@ class TradeSyncAddon:
                 logger.info("⏭️  Skipped: %s", result.reason)
             else:
                 logger.error("❌ Replication failed: %s", result.reason)
+                # Fire-and-forget desktop notification so the trader
+                # sees the rejection even if they're not looking at
+                # the GUI. The replicator has already emitted a
+                # structured DIVERGENCE event for the Sync-health
+                # panel; this notification is the "tap on the
+                # shoulder" complementary surface.
+                notify(
+                    title=f"TradeSynchronizer {env_label}: order rejected",
+                    message=result.reason,
+                )
         threading.Thread(target=runner, name=label, daemon=True).start()
 
     # Back-compat: a couple of older tests called this directly.

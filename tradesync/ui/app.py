@@ -23,6 +23,7 @@ Zero external GUI dependencies (stdlib tkinter / ttk only).
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import re
@@ -30,6 +31,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
@@ -534,6 +536,17 @@ class TradeSyncApp:
         self.engine_toggle: dict[str, ttk.Button] = {}
         self.engine_status: dict[str, tuple[tk.Canvas, int, ttk.Label]] = {}
 
+        # Per-env divergence tracking. _divergences[env] is a list of
+        # payload dicts emitted as "DIVERGENCE {…}" lines by the
+        # replicator; we surface them in the Sync-health panel and as
+        # a ⚠ marker in the env's tab title. Acknowledge-and-clear
+        # empties the list (it does NOT auto-recover the position on
+        # Tradovate — the user has to do that manually if they want).
+        # Not persisted across GUI restarts: the rotating log file
+        # already keeps the full history.
+        self._divergences: dict[str, list[dict]] = {e: [] for e in ENVIRONMENTS}
+        self._sync_health: dict[str, dict] = {e: {} for e in ENVIRONMENTS}
+
         self._dirty = False
         # Per-file dirty tracking. Keys are 'shared' / 'live' / 'demo'.
         # Allows targeted writes: changing only the Demo tab and saving
@@ -618,11 +631,15 @@ class TradeSyncApp:
     def _build_per_env_tab(self, parent, env: str):
         """
         Per-env tab layout: an engine toggle panel pinned at the top
-        (always visible, no scroll), then the scrollable form for
-        that env's settings below.
+        (always visible, no scroll), then the Sync-health panel
+        showing any replication failures for this env, then the
+        scrollable form for that env's settings below.
         """
         panel = self._build_engine_panel(parent, env)
         panel.pack(fill="x", padx=12, pady=(12, 0))
+
+        health = self._build_sync_health_panel(parent, env)
+        health.pack(fill="x", padx=12, pady=(8, 0))
 
         form_container = ttk.Frame(parent)
         form_container.pack(fill="both", expand=True)
@@ -653,6 +670,46 @@ class TradeSyncApp:
         )
         toggle.pack(fill="x", pady=(10, 0))
         self.engine_toggle[env] = toggle
+        return panel
+
+    def _build_sync_health_panel(self, parent, env: str) -> ttk.LabelFrame:
+        """
+        Per-env panel that surfaces replication failures (the
+        DIVERGENCE events emitted by the replicator). When clean:
+        a green dot + reassuring text. When dirty: a red banner
+        with the count and the most recent failure summary, plus an
+        Acknowledge-and-clear button.
+        """
+        panel = ttk.LabelFrame(parent, text="Sync health", padding=10)
+
+        row1 = ttk.Frame(panel)
+        row1.pack(fill="x")
+        dot = tk.Canvas(row1, width=14, height=14,
+                        highlightthickness=0, bg=self.root.cget("bg"))
+        dot.pack(side="left")
+        dot_id = dot.create_oval(2, 2, 12, 12, fill="#1e8e3e", outline="")
+        summary = ttk.Label(row1, text="No replication errors",
+                            style="Status.TLabel")
+        summary.pack(side="left", padx=(8, 0))
+
+        detail = ttk.Label(panel, text="", foreground="#5f6368",
+                           wraplength=520, justify="left")
+        detail.pack(fill="x", pady=(4, 0))
+
+        ack_btn = ttk.Button(panel, text="Acknowledge & clear",
+                             state="disabled",
+                             command=lambda e=env:
+                                 self._acknowledge_divergences(e))
+        ack_btn.pack(anchor="e", pady=(8, 0))
+
+        self._sync_health[env] = {
+            "dot":     dot,
+            "dot_id":  dot_id,
+            "summary": summary,
+            "detail":  detail,
+            "ack":     ack_btn,
+        }
+        self._refresh_sync_health(env)
         return panel
 
     def _build_log_tab(self, parent):
@@ -1017,13 +1074,101 @@ class TradeSyncApp:
             toggle.configure(text="▶  Start engine", state="normal")
 
         # At-a-glance: stamp a dot next to the env's tab title when
-        # active, so the user can see status without switching tabs.
-        if env in self.env_tabs:
-            base = env.capitalize()
-            self.notebook.tab(
-                self.env_tabs[env],
-                text=(f"{base}  ●" if is_active else base),
+        # active and a warning marker when there are unacknowledged
+        # divergences, so the user can see status without switching
+        # tabs.
+        self._refresh_tab_title(env, is_active=is_active)
+
+    def _refresh_tab_title(self, env: str, *, is_active: bool = None) -> None:
+        """Compose the notebook tab text from engine state +
+        divergence count. Called by _refresh_engine_state and by
+        _on_divergence / _acknowledge_divergences."""
+        if env not in self.env_tabs:
+            return
+        if is_active is None:
+            is_active = self.controllers[env].state in (
+                ProxyController.STATE_STARTING,
+                ProxyController.STATE_RUNNING,
             )
+        base = env.capitalize()
+        suffix = ""
+        if is_active:
+            suffix += "  ●"
+        if self._divergences[env]:
+            suffix += "  ⚠"
+        self.notebook.tab(self.env_tabs[env], text=base + suffix)
+
+    # ── divergence handling ───────────────────────────────────────── #
+
+    def _on_divergence(self, env: str, payload: dict) -> None:
+        """Append a parsed DIVERGENCE payload, refresh the per-env
+        Sync-health panel, and update the tab title."""
+        self._divergences[env].append(payload)
+        self._refresh_sync_health(env)
+        self._refresh_tab_title(env)
+
+    def _acknowledge_divergences(self, env: str) -> None:
+        """Clear the per-env divergence list. Does NOT touch
+        Tradovate — the user is signing off that they've reconciled
+        the position manually (or accepted the drift)."""
+        count = len(self._divergences[env])
+        if not count:
+            return
+        if not messagebox.askyesno(
+            "Acknowledge divergences?",
+            f"Clear {count} unresolved {env.upper()} divergence(s)? "
+            f"This only resets the indicator — it does NOT touch the "
+            f"Tradovate position. Reconcile manually first if needed.",
+        ):
+            return
+        self._divergences[env].clear()
+        self._refresh_sync_health(env)
+        self._refresh_tab_title(env)
+        self._append_log(
+            f"[{env.upper()}] ✓ {count} divergence(s) acknowledged & cleared\n"
+        )
+
+    def _refresh_sync_health(self, env: str) -> None:
+        """Repaint the Sync-health panel for `env` from
+        self._divergences[env]."""
+        widgets = self._sync_health.get(env)
+        if not widgets:
+            return
+        items = self._divergences[env]
+        if not items:
+            widgets["dot"].itemconfigure(widgets["dot_id"], fill="#1e8e3e")
+            widgets["summary"].configure(
+                text="No replication errors",
+                foreground=""  # default
+            )
+            widgets["detail"].configure(text="")
+            widgets["ack"].configure(state="disabled",
+                                     text="Acknowledge & clear")
+            return
+        widgets["dot"].itemconfigure(widgets["dot_id"], fill="#d93025")
+        n = len(items)
+        latest = items[-1]
+        # Show count + a one-line summary of the most recent failure.
+        # The Log tab has the full history, so we don't list every one
+        # here — keeps the panel skimmable.
+        widgets["summary"].configure(
+            text=(f"⚠ {n} replication error{'s' if n != 1 else ''} "
+                  f"since last reset"),
+            foreground="#d93025",
+        )
+        when = time.strftime(
+            "%H:%M:%S", time.localtime(latest.get("ts", time.time()))
+        )
+        kind = latest.get("kind", "?")
+        summary = latest.get("summary", "")
+        reason = latest.get("reason", "")
+        widgets["detail"].configure(
+            text=f"Latest ({when}, {kind}): {summary}\n→ {reason}"
+        )
+        widgets["ack"].configure(
+            state="normal",
+            text=f"Acknowledge & clear ({n})",
+        )
 
     # ── log streaming ─────────────────────────────────────────────── #
 
@@ -1033,10 +1178,27 @@ class TradeSyncApp:
             while drained < 200:
                 line = self.log_q.get_nowait()
                 self._append_log(line)
+                self._maybe_extract_divergence(line)
                 drained += 1
         except queue.Empty:
             pass
         self.root.after(100, self._drain_log)
+
+    def _maybe_extract_divergence(self, line: str) -> None:
+        """Pick up `DIVERGENCE {json}` events emitted by the replicator
+        and route them to _on_divergence. Silently ignored on any
+        parsing surprise — we don't want a malformed log line to
+        crash the GUI's polling loop."""
+        idx = line.find("DIVERGENCE {")
+        if idx < 0:
+            return
+        try:
+            payload = json.loads(line[idx + len("DIVERGENCE "):].rstrip())
+        except (json.JSONDecodeError, ValueError):
+            return
+        env = payload.get("env")
+        if env in self._divergences:
+            self._on_divergence(env, payload)
 
     def _append_log(self, line: str):
         self.log_text.configure(state="normal")
@@ -1067,14 +1229,40 @@ class TradeSyncApp:
         )
 
     def _on_close(self):
-        if self._any_engine_running():
+        """
+        Quit handler. Bound to WM_DELETE_WINDOW (the X button, Cmd+Q,
+        and the Quit menu item all route here).
+
+        Sends SIGTERM to every running engine subprocess IN PARALLEL
+        — each ProxyController.stop() waits up to 5 s for SIGTERM and
+        then escalates to SIGKILL, so sequential stops would
+        worst-case the user with 10 s of frozen UI when both engines
+        are running. Parallel stops cap the wait at the slower engine.
+        """
+        running = [c for c in self.controllers.values()
+                   if c.state in (ProxyController.STATE_STARTING,
+                                  ProxyController.STATE_RUNNING)]
+        if running:
             if not messagebox.askyesno(
                 "Engines running",
-                "One or more engines are running. Stop them and quit?",
+                f"{len(running)} engine(s) still running. Stop them and quit?",
             ):
                 return
-        for c in self.controllers.values():
-            c.stop()
+            # Stop in parallel so the user doesn't wait 2× the SIGTERM
+            # timeout when both engines need to be killed.
+            threads = [
+                threading.Thread(target=c.stop, daemon=True)
+                for c in running
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=8)   # each stop has its own 5s internal timeout
+        else:
+            # Defensive: stop() is a no-op on STOPPED/ERROR but keeps
+            # internal bookkeeping consistent in edge cases.
+            for c in self.controllers.values():
+                c.stop()
         self.root.destroy()
 
     def run(self):

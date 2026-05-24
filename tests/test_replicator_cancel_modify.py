@@ -469,5 +469,150 @@ class TestReplicateBracket(unittest.TestCase):
                 len(tradovate.brackets_placed[0]["brackets"]), 1)
 
 
+# ── Divergence emit on failure ─────────────────────────────────────────── #
+
+class _LogCapture:
+    """Capture `tradesync.replicator` log records for inspection."""
+    def __enter__(self):
+        import logging
+        self._records: list[logging.LogRecord] = []
+        self._handler = logging.Handler()
+        self._handler.emit = self._records.append
+        self._handler.setLevel(logging.DEBUG)
+        self._log = logging.getLogger("tradesync.replicator")
+        self._old_level = self._log.level
+        self._log.setLevel(logging.DEBUG)
+        self._log.addHandler(self._handler)
+        return self
+
+    def __exit__(self, *exc):
+        self._log.removeHandler(self._handler)
+        self._log.setLevel(self._old_level)
+
+    def divergence_lines(self) -> list[str]:
+        out = []
+        for r in self._records:
+            msg = r.getMessage()
+            if msg.startswith("DIVERGENCE "):
+                out.append(msg[len("DIVERGENCE "):])
+        return out
+
+
+class TestDivergenceEmit(unittest.TestCase):
+    """The replicator emits a structured DIVERGENCE log line on
+    every genuine failure (success=False AND skipped=False). Skips
+    (policy filters) DON'T emit — they're not divergences."""
+
+    def test_emit_on_place_order_failure(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, _ = _build_replicator(tmp_path=Path(tmp))
+            # Make Tradovate placeorder raise → genuine failure path
+            orig = tradovate.place_order
+            tradovate.place_order = lambda **_: (_ for _ in ()).throw(
+                TradovateOrderError("HTTP 400 — insufficient margin")
+            )
+            with _LogCapture() as cap:
+                result = r.replicate_new(_make_ibkr_order(cOID="tv-1"))
+            tradovate.place_order = orig
+            self.assertFalse(result.success)
+            self.assertFalse(result.skipped)
+
+            lines = cap.divergence_lines()
+            self.assertEqual(len(lines), 1, lines)
+            payload = json.loads(lines[0])
+            self.assertEqual(payload["kind"], "new")
+            self.assertEqual(payload["env"], "demo")
+            self.assertEqual(payload["ref"], "tv-1")
+            self.assertIn("insufficient margin", payload["reason"])
+            self.assertIn("BUY 2", payload["summary"])
+
+    def test_emit_on_cancel_failure(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, _ = _build_replicator(tmp_path=Path(tmp))
+            r.replicate_new(_make_ibkr_order(cOID="tv-1"))
+            r.register_ibkr_id("tv-1", "ibkr-42")
+            tradovate.cancel_raises = TradovateOrderError("HTTP 500")
+            with _LogCapture() as cap:
+                result = r.replicate_cancel(IbkrOrderCancel(
+                    account_id="U7713037", ibkr_order_id="ibkr-42"))
+            self.assertFalse(result.success)
+            self.assertFalse(result.skipped)
+
+            lines = cap.divergence_lines()
+            self.assertEqual(len(lines), 1, lines)
+            payload = json.loads(lines[0])
+            self.assertEqual(payload["kind"], "cancel")
+            self.assertEqual(payload["ref"], "ibkr-42")
+            self.assertIn("CANCEL", payload["summary"])
+
+    def test_emit_on_modify_failure(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, _ = _build_replicator(tmp_path=Path(tmp))
+            r.replicate_new(_make_ibkr_order(cOID="tv-1"))
+            r.register_ibkr_id("tv-1", "ibkr-42")
+            tradovate.modify_raises = TradovateOrderError("HTTP 500")
+            with _LogCapture() as cap:
+                result = r.replicate_modify(IbkrOrderModify(
+                    account_id="U7713037", ibkr_order_id="ibkr-42",
+                    quantity=None, price=21600.0, aux_price=None,
+                    tif=None, raw={},
+                ))
+            self.assertFalse(result.success)
+            self.assertFalse(result.skipped)
+
+            lines = cap.divergence_lines()
+            self.assertEqual(len(lines), 1)
+            payload = json.loads(lines[0])
+            self.assertEqual(payload["kind"], "modify")
+
+    def test_no_emit_on_policy_skip(self):
+        """Account filter / SKIP_PROTECTIVE_STOPS / unknown-id skips
+        are NOT divergences and must not emit."""
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, _ = _build_replicator(
+                cfg=_make_config(watched=["U9999999"]),
+                tmp_path=Path(tmp),
+            )
+            with _LogCapture() as cap:
+                # Account filter: U7713037 not watched → skip
+                result = r.replicate_new(_make_ibkr_order(
+                    cOID="tv-1", account_id="U7713037"))
+            self.assertTrue(result.skipped)
+            self.assertEqual(cap.divergence_lines(), [])
+
+    def test_no_emit_on_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, _ = _build_replicator(tmp_path=Path(tmp))
+            with _LogCapture() as cap:
+                result = r.replicate_new(_make_ibkr_order(cOID="tv-1"))
+            self.assertTrue(result.success)
+            self.assertEqual(cap.divergence_lines(), [])
+
+    def test_emit_on_bracket_failure_uses_bracket_kind(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, _ = _build_replicator(tmp_path=Path(tmp))
+
+            # Replace place_bracket to raise
+            def boom(**_):
+                raise TradovateOrderError("placeoso HTTP 400 — bad symbol")
+            tradovate.place_bracket = boom
+
+            with _LogCapture() as cap:
+                result = r.replicate_new(_make_bracket())
+            self.assertFalse(result.success)
+            self.assertFalse(result.skipped)
+
+            lines = cap.divergence_lines()
+            self.assertEqual(len(lines), 1)
+            payload = json.loads(lines[0])
+            self.assertEqual(payload["kind"], "bracket")
+            self.assertIn("BRACKET", payload["summary"])
+            self.assertIn("exit", payload["summary"])
+
+
 if __name__ == "__main__":
     unittest.main()
