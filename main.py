@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import logging.handlers
 import signal
 import sys
+from pathlib import Path
 from typing import Optional
 
 from tradesync.brokers.ibkr import IbkrContractResolver
@@ -35,21 +37,48 @@ from tradesync.proxy.addon import TradeSyncAddon
 from tradesync.replicator import Replicator
 
 
+# Rotating-file-handler tuning. Both engines write to the same file
+# (disambiguated by the [LIVE] / [DEMO] tag) so total on-disk usage is
+# ≈ LOG_FILE_MAX_BYTES * (LOG_FILE_BACKUP_COUNT + 1). 5 MB × 6 = 30 MB
+# is plenty for a personal-use day-trading workflow.
+LOG_FILE_MAX_BYTES = 5 * 1024 * 1024
+LOG_FILE_BACKUP_COUNT = 5
+
+
 def _setup_logging(cfg: Config) -> None:
     """
     Configure root logging. The env-tag (`[LIVE]` / `[DEMO]`) is baked
     into the format so that, when the GUI runs both engines side by
     side and their stdout streams interleave in the Log tab and in
-    /tmp/tradesync.log, every line is unambiguously attributable.
+    cfg.log_file, every line is unambiguously attributable.
+
+    The log file path supports `~` (expanded to the user's home) and
+    its parent directory is created on demand. Rotation uses
+    RotatingFileHandler so the file never grows unboundedly. Both
+    engine subprocesses share the same file: the worst case during
+    a concurrent rotation is that one process keeps writing to the
+    just-rotated `.log.1` for a few seconds, which is harmless for
+    personal-use day-trading scale.
     """
     env_tag = f"[{cfg.tradovate_env.upper()}]"
     level = getattr(logging, cfg.log_level, logging.INFO)
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+
+    log_path = Path(cfg.log_file).expanduser()
     try:
-        handlers.append(logging.FileHandler(cfg.log_file))
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.handlers.RotatingFileHandler(
+            str(log_path),
+            maxBytes=LOG_FILE_MAX_BYTES,
+            backupCount=LOG_FILE_BACKUP_COUNT,
+            encoding="utf-8",
+        ))
     except OSError:
-        # If we can't write the log file, keep the stream handler only.
+        # If we can't write the log file (read-only fs, permissions,
+        # etc.) we keep the stream handler so the GUI's Log tab still
+        # gets the merged stdout stream.
         pass
+
     logging.basicConfig(
         level=level,
         format=f"%(asctime)s %(levelname)-7s {env_tag:<6} %(name)-22s %(message)s",

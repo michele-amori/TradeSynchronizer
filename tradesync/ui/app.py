@@ -82,8 +82,10 @@ GENERAL_FIELDS: list[tuple] = [
     ("__section__", "Logging",                 "section",  None, None),
     ("LOG_LEVEL", "Level", "choice", "INFO",
         ["DEBUG", "INFO", "WARNING", "ERROR"]),
-    ("LOG_FILE",  "File",  "text",   "/tmp/tradesync.log",
-        "Both engines write here, tagged [LIVE] / [DEMO] for disambiguation."),
+    ("LOG_FILE",  "File",  "text",
+        "~/Library/Logs/TradeSynchronizer/tradesync.log",
+        "Both engines write here, tagged [LIVE] / [DEMO] for disambiguation. "
+        "Rotated automatically at 5 MB (5 backups kept). Path supports ~."),
 ]
 
 PER_ENV_FIELDS: list[tuple] = [
@@ -275,7 +277,7 @@ class EnvStore:
             "",
             "# ── Logging ─────────────────────────────────────────────────────── #",
             f"LOG_LEVEL={s.get('LOG_LEVEL', 'INFO')}",
-            f"LOG_FILE={s.get('LOG_FILE', '/tmp/tradesync.log')}",
+            f"LOG_FILE={s.get('LOG_FILE', '~/Library/Logs/TradeSynchronizer/tradesync.log')}",
             "",
         ]
 

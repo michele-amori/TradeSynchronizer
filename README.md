@@ -172,7 +172,8 @@ python main.py
 
 You should see (note the `[LIVE]` / `[DEMO]` tag in every line —
 when both engines run via the GUI those logs interleave in
-/tmp/tradesync.log and the tag tells them apart):
+`~/Library/Logs/TradeSynchronizer/tradesync.log` and the tag tells
+them apart; the file is rotated automatically at 5 MB):
 
 ```
 HH:MM:SS INFO    [LIVE] tradesync.bootstrap  TradeSynchronizer starting up

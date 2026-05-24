@@ -102,7 +102,9 @@ class Config:
 
     # ── Logging ──────────────────────────────────────────────────── #
     log_level: str = "INFO"
-    log_file:  str = "/tmp/tradesync.log"
+    # macOS-standard persistent location (~/Library/Logs survives
+    # reboots; main.py expands the `~` and creates the dir on demand).
+    log_file:  str = "~/Library/Logs/TradeSynchronizer/tradesync.log"
 
     # ── Derived ──────────────────────────────────────────────────── #
     @property
@@ -198,5 +200,6 @@ class Config:
             skip_protective_stops=skip_stops,
             ibkr_watched_accounts=watched,
             log_level=(os.getenv("LOG_LEVEL") or "INFO").upper(),
-            log_file=os.getenv("LOG_FILE") or "/tmp/tradesync.log",
+            log_file=(os.getenv("LOG_FILE")
+                      or "~/Library/Logs/TradeSynchronizer/tradesync.log"),
         )
