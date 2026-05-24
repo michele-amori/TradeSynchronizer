@@ -226,12 +226,27 @@ HH:MM:SS INFO    [LIVE] tradesync.bootstrap  mitmproxy listening on 127.0.0.1:80
 
 ### Launch TradingView Desktop through the proxy
 
+The easy path — a wrapper script that handles all the gotchas
+(quitting an already-running TV, verifying the mitmproxy CA is
+trusted, warning if nothing is listening on the target port):
+
 ```bash
-open -a "TradingView" --args --proxy-server=127.0.0.1:8080
+./scripts/launch-tradingview.sh demo   # → DEMO engine on :8081
+./scripts/launch-tradingview.sh live   # → LIVE engine on :8080
+./scripts/launch-tradingview.sh --check  # diagnostics only
 ```
 
-(If TradingView is already running, quit it first — Chromium-based
-apps only pick up the `--proxy-server` flag at launch time.)
+The bare command, if you'd rather do it by hand:
+
+```bash
+osascript -e 'quit app "TradingView"'     # if it's running
+open -a "TradingView" --args --proxy-server=127.0.0.1:8081
+```
+
+Why the quit-first dance: Chromium-based apps (TradingView is
+Electron 38 under the hood) only read `--proxy-server` at launch
+time. If TV is already running, `open -a` just brings the focus
+to the existing instance — the flag is silently ignored.
 
 Place an order on IBKR from TradingView as usual. In the
 TradeSynchronizer log (GUI **Log** tab or terminal) you'll see:
@@ -266,7 +281,7 @@ The first three keys live in `.env` (shared by both engines);
 | `MissingAppCredentialsError` at startup | Run §2 of *One-time setup* — register the app at Tradovate and populate `tradesync/_app_credentials.py`. |
 | `Could not resolve conid=… not in cache` | Open the chart for that symbol in TradingView once; the contract `/info` response will be observed and cached. Active fallback also works once an IBKR token has been captured. |
 | `Contract 'MESH6' not found on Tradovate` | The symbol resolver produced a symbol Tradovate doesn't recognise. Check the log line "Symbol map: conid=… → IBKR='…' → Tradovate='…'" and verify against Tradovate's contract list. |
-| TradingView doesn't go through the proxy | Quit TradingView completely, then relaunch with `open -a TradingView --args --proxy-server=127.0.0.1:8080`. Chromium-based apps only read the flag at launch. |
+| TradingView doesn't go through the proxy | Run `./scripts/launch-tradingview.sh demo` (or `live`) — it quits any running instance first and re-opens with the proxy flag. Chromium-based apps only read `--proxy-server` at launch. |
 | `SSL: CERTIFICATE_VERIFY_FAILED` from TradingView | Run `./scripts/install_ca_cert.sh --check` to confirm the CA isn't trusted, then `./scripts/install_ca_cert.sh` to install. |
 
 ## Order lifecycle: cancellations & modifications
