@@ -90,6 +90,15 @@ GENERAL_FIELDS: list[tuple] = [
         ["mirror", "market"]),
     ("SKIP_PROTECTIVE_STOPS", "Skip protective stops", "bool",   "true",   None),
 
+    ("__section__", "TradingView Desktop",     "section",  None, None),
+    ("AUTO_LAUNCH_TRADINGVIEW", "Auto-launch when starting engine",
+        "bool", "true",
+        "When ON, pressing '▶ Start engine' also launches TradingView "
+        "Desktop with --proxy-server pointing at this engine's port. "
+        "If TV is already running on the wrong proxy port (or no proxy), "
+        "it's quit and relaunched automatically. Turn OFF to manage TV "
+        "by hand (or via scripts/launch-tradingview.sh)."),
+
     ("__section__", "Logging",                 "section",  None, None),
     ("LOG_LEVEL", "Level", "choice", "INFO",
         ["DEBUG", "INFO", "WARNING", "ERROR"]),
@@ -1076,17 +1085,90 @@ class TradeSyncApp:
             if self._dirty:
                 return
 
-        port = self.store.per_env[env].get(
+        port_str = self.store.per_env[env].get(
             "PROXY_LISTEN_PORT",
             PER_ENV_DEFAULTS["PROXY_LISTEN_PORT"][env],
         )
         env_overrides = {
             "TRADOVATE_ENVIRONMENT": env,
-            "PROXY_LISTEN_PORT": port,
+            "PROXY_LISTEN_PORT": port_str,
         }
         err = self.controllers[env].start(env_overrides=env_overrides)
         if err:
             messagebox.showerror(f"Cannot start {env.upper()}", err)
+            return
+
+        # Auto-launch TradingView through this engine's proxy (if
+        # configured ON in the General tab). Runs in a worker thread
+        # because the launcher might need to wait for the proxy port
+        # to come up + osascript-quit TV + relaunch — up to ~15s end-
+        # to-end. We don't want to freeze the GUI for any of it.
+        if self._auto_launch_enabled():
+            try:
+                port = int(port_str)
+            except (TypeError, ValueError):
+                self._append_log(
+                    f"[{env.upper()}] ⚠ PROXY_LISTEN_PORT={port_str!r} "
+                    "is not an integer — skipping TradingView auto-launch.\n"
+                )
+                return
+            self._launch_tradingview_async(env, port)
+
+    def _auto_launch_enabled(self) -> bool:
+        """Read the AUTO_LAUNCH_TRADINGVIEW shared setting. Defaults
+        to True if the key is absent."""
+        v = self.store.shared.get("AUTO_LAUNCH_TRADINGVIEW", "true")
+        return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+    def _launch_tradingview_async(self, env: str, port: int) -> None:
+        """Spawn a daemon thread that reconciles TradingView's state
+        with the requested proxy port. Result lands in the Log tab
+        via the existing engine subprocess stdout pipe — except this
+        thread runs in-process, so we route its log lines into the
+        same queue manually."""
+        from ..tradingview_launcher import (
+            ensure_tradingview_via_proxy, is_installed,
+        )
+
+        if not is_installed():
+            self._append_log(
+                f"[{env.upper()}] ⚠ TradingView Desktop is not "
+                "installed at /Applications/TradingView.app — skipping "
+                "auto-launch.\n"
+            )
+            return
+
+        def runner():
+            try:
+                status = ensure_tradingview_via_proxy(
+                    port, wait_for_proxy=True,
+                )
+            except Exception as e:
+                self.root.after(
+                    0, self._append_log,
+                    f"[{env.upper()}] ❌ TradingView launcher failed: "
+                    f"{type(e).__name__}: {e}\n",
+                )
+                return
+
+            # Map status → a friendly log line surfaced in the Log tab.
+            messages = {
+                "launched":        "🚀 Launched TradingView with proxy.",
+                "already_proxied": "✓ TradingView already running on the right port.",
+                "restarted":       "🔄 Restarted TradingView with proxy.",
+                "proxy_not_ready": "⚠ Proxy port wasn't ready in time — "
+                                   "TradingView was NOT launched.",
+                "not_installed":   "⚠ TradingView not installed — skipped.",
+            }
+            msg = messages.get(status, f"TV launcher → {status}")
+            self.root.after(
+                0, self._append_log,
+                f"[{env.upper()}] {msg}\n",
+            )
+
+        threading.Thread(
+            target=runner, name=f"tv-launcher-{env}", daemon=True,
+        ).start()
 
     def _on_stop(self, env: str):
         self.controllers[env].stop()

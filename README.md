@@ -226,19 +226,34 @@ HH:MM:SS INFO    [LIVE] tradesync.bootstrap  mitmproxy listening on 127.0.0.1:80
 
 ### Launch TradingView Desktop through the proxy
 
-The easy path — a wrapper script that handles all the gotchas
-(quitting an already-running TV, verifying the mitmproxy CA is
-trusted, warning if nothing is listening on the target port):
+**Auto (default).** Just press **▶ Start engine** in the GUI. The
+*AUTO_LAUNCH_TRADINGVIEW* checkbox in the General tab (ON by
+default) makes the engine also launch TradingView Desktop with the
+right `--proxy-server` flag once its mitmproxy port is accepting
+connections. If TV is already running on the wrong proxy port (or
+no proxy at all) it gets quit and relaunched automatically.
+
+The auto-launcher (`tradesync/tradingview_launcher.py`) handles
+all four gotchas internally: TV already running, wrong-port
+mismatch, CA-not-trusted (passes `--ignore-certificate-errors` as
+a safety net), and proxy not yet bound (waits up to 8 s before
+giving up). The Log tab gets a one-line summary:
+
+    [DEMO] 🚀 Launched TradingView with proxy.
+    [DEMO] ✓ TradingView already running on the right port.
+    [DEMO] 🔄 Restarted TradingView with proxy.
+    [DEMO] ⚠ Proxy port wasn't ready in time — TradingView was NOT launched.
+
+**Manual fallback.** Untick the checkbox if you'd rather manage
+TV yourself. Two ways to do it from the CLI:
 
 ```bash
+# Wrapper script with pre-flight checks (CA trust, port readiness):
 ./scripts/launch-tradingview.sh demo   # → DEMO engine on :8081
 ./scripts/launch-tradingview.sh live   # → LIVE engine on :8080
 ./scripts/launch-tradingview.sh --check  # diagnostics only
-```
 
-The bare command, if you'd rather do it by hand:
-
-```bash
+# Bare command:
 osascript -e 'quit app "TradingView"'     # if it's running
 open -a "TradingView" --args --proxy-server=127.0.0.1:8081
 ```
@@ -246,7 +261,8 @@ open -a "TradingView" --args --proxy-server=127.0.0.1:8081
 Why the quit-first dance: Chromium-based apps (TradingView is
 Electron 38 under the hood) only read `--proxy-server` at launch
 time. If TV is already running, `open -a` just brings the focus
-to the existing instance — the flag is silently ignored.
+to the existing instance — the flag is silently ignored. The
+in-app launcher and the wrapper script both handle this for you.
 
 Place an order on IBKR from TradingView as usual. In the
 TradeSynchronizer log (GUI **Log** tab or terminal) you'll see:
