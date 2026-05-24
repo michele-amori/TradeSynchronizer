@@ -1452,13 +1452,6 @@ class TradeSyncApp:
 
     # ── lifecycle ─────────────────────────────────────────────────── #
 
-    def _any_engine_running(self) -> bool:
-        return any(
-            c.state in (ProxyController.STATE_STARTING,
-                        ProxyController.STATE_RUNNING)
-            for c in self.controllers.values()
-        )
-
     def _on_close(self):
         """
         Quit handler. Bound to WM_DELETE_WINDOW (the X button, Cmd+Q,

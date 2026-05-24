@@ -33,3 +33,4 @@ venv/
 
 # Tradovate APPLICATION cid/sec (NOT user creds — see the .example file)
 tradesync/_app_credentials.py
+.coverage

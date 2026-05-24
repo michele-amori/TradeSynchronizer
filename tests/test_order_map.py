@@ -175,5 +175,74 @@ class TestOrderMapThreadSafety(unittest.TestCase):
                     )
 
 
+class TestBatchedWrites(unittest.TestCase):
+    """OrderMap.batch() coalesces multiple mutations into a single
+    disk write. Critical for the bracket-replication hot path."""
+
+    def test_batch_collapses_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "orders.json"
+            om = OrderMap(p)
+            calls = []
+            real_save = om._save_locked
+            om._save_locked = lambda: (calls.append(1), real_save())[1]
+
+            with om.batch():
+                om.add_pending("c1")
+                om.set_tradovate_id("c1", 100)
+                om.set_ibkr_id("c1", "ibkr-1")
+                om.add_pending("c2")
+                om.set_tradovate_id("c2", 101)
+
+            self.assertEqual(len(calls), 1,
+                             f"expected 1 disk write, got {len(calls)}")
+            self.assertEqual(om.tradovate_for_ibkr_id("ibkr-1"), 100)
+            self.assertEqual(om.get_by_coid("c2").tradovate_id, 101)
+
+    def test_batch_no_write_if_nothing_changed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "orders.json"
+            om = OrderMap(p)
+            calls = []
+            om._save_locked = lambda: calls.append(1)
+            with om.batch():
+                pass
+            self.assertEqual(calls, [])
+
+    def test_batch_nested_only_outermost_flushes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "orders.json"
+            om = OrderMap(p)
+            calls = []
+            real = om._save_locked
+            om._save_locked = lambda: (calls.append(1), real())[1]
+
+            with om.batch():
+                om.add_pending("c1")
+                with om.batch():
+                    om.set_tradovate_id("c1", 100)
+                self.assertEqual(len(calls), 0)
+                om.set_ibkr_id("c1", "ibkr-1")
+            self.assertEqual(len(calls), 1)
+
+    def test_batch_flushes_even_on_exception(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "orders.json"
+            om = OrderMap(p)
+            calls = []
+            real = om._save_locked
+            om._save_locked = lambda: (calls.append(1), real())[1]
+
+            with self.assertRaises(ValueError):
+                with om.batch():
+                    om.add_pending("c1")
+                    om.set_tradovate_id("c1", 100)
+                    raise ValueError("boom")
+
+            self.assertEqual(len(calls), 1)
+            om2 = OrderMap(p)
+            self.assertEqual(om2.get_by_coid("c1").tradovate_id, 100)
+
+
 if __name__ == "__main__":
     unittest.main()

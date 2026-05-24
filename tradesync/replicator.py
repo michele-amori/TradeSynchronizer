@@ -36,7 +36,6 @@ from .config import Config
 from .order_map import OrderMap, default_store_path
 from .proxy.ibkr_parser import (
     IbkrBracket,
-    IbkrBracketChild,
     IbkrOrder,
     IbkrOrderCancel,
     IbkrOrderModify,
@@ -137,9 +136,6 @@ class Replicator:
                 "bracket" if isinstance(parsed, IbkrBracket) else "new"
             ), reason=result.reason)
         return result
-
-    # Back-compat alias for callers that still use the old name.
-    replicate = replicate_new
 
     def _replicate_new_inner(self, ibkr_order: IbkrOrder) -> ReplicationResult:
         logger.debug("_replicate_new_inner: entering with %s", ibkr_order)
@@ -338,12 +334,16 @@ class Replicator:
             )
 
         # Register one map entry per leg so any leg can be cancelled
-        # or modified independently later.
-        if entry.cOID:
-            self._order_map.set_tradovate_id(entry.cOID, placed.entry_order_id)
-        for child, tv_id in zip(children, placed.bracket_ids):
-            if child.cOID:
-                self._order_map.set_tradovate_id(child.cOID, tv_id)
+        # or modified independently later. Batched so the bracket's
+        # 1+N writes collapse into a single disk flush (the json file
+        # write is ~1 ms on SSD and we're inside the order-replication
+        # hot path).
+        with self._order_map.batch():
+            if entry.cOID:
+                self._order_map.set_tradovate_id(entry.cOID, placed.entry_order_id)
+            for child, tv_id in zip(children, placed.bracket_ids):
+                if child.cOID:
+                    self._order_map.set_tradovate_id(child.cOID, tv_id)
 
         child_summary = ", ".join(
             f"{c.order_type}@{c.price or c.aux_price}"

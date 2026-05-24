@@ -412,6 +412,85 @@ the first real bracket replication, expect either a clean success
 or a clearly logged failure: the full Tradovate response body is
 dumped on any error so the parser can be calibrated quickly.
 
+## Performance characteristics
+
+The replication critical path (a TradingView order entering the
+proxy → a Tradovate order placed) is dominated by the latency of
+two HTTPS round-trips to Tradovate (~50–200 ms each on a healthy
+link). Everything else in the in-process path is sub-millisecond
+and has been kept that way on purpose:
+
+- **Contract id cache** in `TradovateClient._contract_id_cache`:
+  the first order for a symbol resolves the Tradovate contract id
+  (one extra HTTP call); subsequent orders on the same symbol skip
+  that call entirely.
+- **conid → symbol cache** in `IbkrContractResolver._symbol_cache`:
+  populated passively from `/info` response bodies that TradingView
+  itself requests when rendering the chart, so by the time an order
+  POST hits the proxy the symbol is usually already resolved.
+- **Persistent HTTP connection** to Tradovate via `requests.Session`
+  with keep-alive — saves TLS handshake on every order.
+- **OrderMap batched writes** (`OrderMap.batch()` context manager):
+  the bracket replication path coalesces up to 3 JSON file writes
+  (entry + 2 children) into a single disk flush, saving ~2 ms per
+  bracket on SSD. Same mechanism applies to any sequence of
+  mutations the caller groups together.
+- **Notifications fire-and-forget**: desktop notifications spawn
+  `osascript` via `subprocess.Popen` with discarded stdio and
+  never block the replicator thread.
+- **`_coids_by_flow` housekeeping**: bracket↔response cOID lookups
+  are evicted from the in-memory dict in the response hook, so the
+  proxy doesn't accumulate state across the trading day.
+
+For personal day-trading scale (≤ ~100 orders/day) this is
+comfortable. If the workload ever scaled to hundreds of orders per
+second, the natural next step would be a `ThreadPoolExecutor` for
+the replication workers and an `async` HTTP client — but neither
+is needed at current scale, so neither is wired in.
+
+## Development
+
+### Pre-commit hook
+
+A versioned pre-commit hook lives at `scripts/pre-commit.sh` and
+runs three checks on every `git commit`:
+
+1. **Tests** (`python -m unittest discover tests`) — blocks on
+   failure. Currently 175 tests, ~0.15 s wall.
+2. **`.app` rebuild** (`./build_app.sh`) — blocks if the bundle
+   doesn't build (catches stale imports, broken shebangs, etc.).
+3. **README freshness** — warns and prompts if the staged diff
+   touches `tradesync/`, `main.py`, `gui.py`, `build_app.sh`,
+   `requirements.txt` or `scripts/`, but leaves `README.md`
+   unmodified. Answer `y` to proceed anyway; anything else aborts.
+
+Install once per clone:
+
+```bash
+./scripts/install-hooks.sh
+```
+
+It symlinks `scripts/pre-commit.sh` into `.git/hooks/pre-commit`
+(re-runnable to refresh). Bypass for a single commit (e.g. WIP
+push) with `git commit --no-verify`.
+
+### Test + coverage
+
+```bash
+.venv/bin/python -m unittest discover tests              # ~0.15s, 175 tests
+.venv/bin/python -m coverage run --source=tradesync \
+    -m unittest discover tests
+.venv/bin/python -m coverage report --skip-empty
+```
+
+Current coverage of the core business logic (parser, replicator,
+order map, symbol converter, traffic logger, preflight, notify,
+launcher) sits at **85–100 %**. HTTP boundaries (`brokers/ibkr.py`,
+`brokers/tradovate.py`) and the Tkinter UI (`ui/app.py`) are
+deliberately lower because integration coverage there requires
+mitmproxy `HTTPFlow` fixtures and Tk-on-CI plumbing that aren't
+worth the maintenance burden at this scale.
+
 ## What it does NOT do
 
 - **Does not place orders directly on prop-firm accounts**. That's

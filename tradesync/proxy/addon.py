@@ -302,10 +302,3 @@ class TradeSyncAddon:
                     message=result.reason,
                 )
         threading.Thread(target=runner, name=label, daemon=True).start()
-
-    # Back-compat: a couple of older tests called this directly.
-    def _replicate_async(self, order: IbkrOrder) -> None:
-        self._spawn(
-            self._replicator.replicate_new, order,
-            label=f"replicate-new-cOID-{order.cOID}",
-        )
