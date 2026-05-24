@@ -63,6 +63,9 @@ class FakeTradovate:
         self.cancel_raises: Optional[BaseException] = None
         self.modify_raises: Optional[BaseException] = None
         self.bracket_raises: Optional[BaseException] = None
+        self.status_raises: Optional[BaseException] = None
+        self.status_by_id: dict[int, str] = {}
+        self.status_default: str = "Working"
         self.connected = True
 
     def get_contract_id(self, _symbol: str) -> int:
@@ -103,6 +106,14 @@ class FakeTradovate:
             oco_id=99,
             raw={"orderId": entry_id, "oso1Id": bracket_ids[0] if bracket_ids else None},
         )
+
+    def get_order_status(self, order_id: int) -> str:
+        # Controlled by self.status_by_id (mapping tv_id → status
+        # string), with self.status_default as fallback. If
+        # status_raises is set, raises it.
+        if self.status_raises:
+            raise self.status_raises
+        return self.status_by_id.get(int(order_id), self.status_default)
 
 
 def _make_config(*, watched=None, mode="mirror") -> Config:
@@ -612,6 +623,126 @@ class TestDivergenceEmit(unittest.TestCase):
             self.assertEqual(payload["kind"], "bracket")
             self.assertIn("BRACKET", payload["summary"])
             self.assertIn("exit", payload["summary"])
+
+
+# ── Startup OrderMap reconciliation ────────────────────────────────────── #
+
+class TestReconcileWithTradovate(unittest.TestCase):
+    """The reconcile_with_tradovate() entry point walks every map
+    entry, queries Tradovate, and prunes anything that's no longer
+    in an active state."""
+
+    def _seed(self, r, n: int):
+        """Place n orders so the order map has known cOID → tv_id
+        bindings. Returns the list of (cOID, tv_id) pairs."""
+        pairs = []
+        for i in range(n):
+            coid = f"tv-{i}"
+            r.replicate_new(_make_ibkr_order(cOID=coid))
+            r.register_ibkr_id(coid, f"ibkr-{i}")
+            rec = r.order_map.get_by_coid(coid)
+            pairs.append((coid, rec.tradovate_id))
+        return pairs
+
+    def test_empty_map_is_a_noop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, _, _ = _build_replicator(tmp_path=Path(tmp))
+            stats = r.reconcile_with_tradovate()
+            self.assertEqual(stats["checked"], 0)
+            self.assertEqual(stats["kept"], 0)
+            self.assertEqual(stats["pruned"], 0)
+
+    def test_all_working_keeps_everything(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, store = _build_replicator(tmp_path=Path(tmp))
+            self._seed(r, 3)
+            tradovate.status_default = "Working"
+            stats = r.reconcile_with_tradovate()
+            self.assertEqual(stats["checked"], 3)
+            self.assertEqual(stats["kept"], 3)
+            self.assertEqual(stats["pruned"], 0)
+            self.assertEqual(len(store), 3)
+
+    def test_filled_is_pruned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, store = _build_replicator(tmp_path=Path(tmp))
+            pairs = self._seed(r, 3)
+            # tv-0 filled, tv-1 still working, tv-2 cancelled
+            tradovate.status_by_id = {
+                pairs[0][1]: "Filled",
+                pairs[1][1]: "Working",
+                pairs[2][1]: "Cancelled",
+            }
+            stats = r.reconcile_with_tradovate()
+            self.assertEqual(stats["kept"], 1)
+            self.assertEqual(stats["pruned"], 2)
+            # Only tv-1 survives
+            self.assertIsNone(store.get_by_coid("tv-0"))
+            self.assertIsNotNone(store.get_by_coid("tv-1"))
+            self.assertIsNone(store.get_by_coid("tv-2"))
+
+    def test_rejected_and_expired_are_pruned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, store = _build_replicator(tmp_path=Path(tmp))
+            pairs = self._seed(r, 2)
+            tradovate.status_by_id = {
+                pairs[0][1]: "Rejected",
+                pairs[1][1]: "Expired",
+            }
+            stats = r.reconcile_with_tradovate()
+            self.assertEqual(stats["kept"], 0)
+            self.assertEqual(stats["pruned"], 2)
+            self.assertEqual(len(store), 0)
+
+    def test_not_found_is_pruned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, store = _build_replicator(tmp_path=Path(tmp))
+            self._seed(r, 1)
+            tradovate.status_raises = TradovateOrderNotFound("404")
+            stats = r.reconcile_with_tradovate()
+            self.assertEqual(stats["pruned"], 1)
+            self.assertEqual(len(store), 0)
+
+    def test_transient_error_does_not_prune(self):
+        """An HTTP 503 / network error during reconciliation must
+        leave the map untouched — we'd rather start with a stale-
+        but-recoverable map than wipe valid mappings on a flake."""
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, store = _build_replicator(tmp_path=Path(tmp))
+            self._seed(r, 2)
+            tradovate.status_raises = TradovateOrderError("HTTP 503")
+            stats = r.reconcile_with_tradovate()
+            self.assertEqual(stats["errors"], 2)
+            self.assertEqual(stats["pruned"], 0)
+            self.assertEqual(len(store), 2)
+
+    def test_entry_without_tv_id_is_skipped_not_pruned(self):
+        """A cOID added via add_pending but for which the Tradovate
+        placeorder hasn't completed (or failed) must NOT be pruned
+        on reconciliation — it might be in flight."""
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, store = _build_replicator(tmp_path=Path(tmp))
+            store.add_pending("tv-orphan")
+            stats = r.reconcile_with_tradovate()
+            self.assertEqual(stats["skipped_no_tv_id"], 1)
+            self.assertEqual(stats["pruned"], 0)
+            self.assertIsNotNone(store.get_by_coid("tv-orphan"))
+
+    def test_active_statuses_set_covers_pending(self):
+        """PendingNew / PendingCancel / Accepted are also considered
+        active — Tradovate emits these transiently."""
+        with tempfile.TemporaryDirectory() as tmp:
+            r, tradovate, store = _build_replicator(tmp_path=Path(tmp))
+            pairs = self._seed(r, 4)
+            tradovate.status_by_id = {
+                pairs[0][1]: "PendingNew",
+                pairs[1][1]: "Accepted",
+                pairs[2][1]: "PendingReplace",
+                pairs[3][1]: "PendingCancel",
+            }
+            stats = r.reconcile_with_tradovate()
+            self.assertEqual(stats["kept"], 4)
+            self.assertEqual(stats["pruned"], 0)
 
 
 if __name__ == "__main__":

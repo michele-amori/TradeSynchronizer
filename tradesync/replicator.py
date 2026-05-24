@@ -603,3 +603,103 @@ class Replicator:
         if isinstance(parsed, (IbkrOrderCancel, IbkrOrderModify)):
             return parsed.ibkr_order_id
         return ""
+
+    # ================================================================== #
+    #  Startup reconciliation                                             #
+    # ================================================================== #
+
+    # Tradovate `ordStatus` values that mean "this order is still
+    # active on the book". Anything outside this set is terminal and
+    # the OrderMap entry can be removed.
+    _ACTIVE_STATUSES = frozenset({"Working", "PendingNew", "PendingReplace",
+                                  "PendingCancel", "Accepted"})
+
+    def reconcile_with_tradovate(self) -> dict:
+        """
+        Walk every entry in the persistent OrderMap and verify that
+        the matched Tradovate order is still active. Prune entries
+        whose Tradovate side is Filled / Cancelled / Rejected /
+        Expired / unknown.
+
+        Designed to run once at engine startup, AFTER tradovate.connect()
+        succeeds. Bounded by the number of entries in the map (typically
+        single digits) × the latency of /order/item (≈ 100-300 ms each).
+
+        Never raises: a Tradovate outage during reconciliation logs a
+        warning and leaves the map untouched (we'd rather start with
+        a stale-but-recoverable map than refuse to boot the engine).
+
+        Returns a small stats dict — useful for tests and for the
+        startup log line.
+        """
+        stats = {"checked": 0, "kept": 0, "pruned": 0,
+                 "errors": 0, "skipped_no_tv_id": 0}
+
+        # Snapshot the cOIDs up front: we'll mutate the map inside
+        # the loop and don't want to iterate over a moving target.
+        # Access the internal _by_coid directly under the lock-safe
+        # OrderMap API: there's no public "list all" so we use
+        # get_by_coid by extracting keys.
+        with self._order_map._lock:
+            coids = list(self._order_map._by_coid.keys())
+
+        if not coids:
+            logger.info("Reconciliation: order map is empty — nothing to check.")
+            return stats
+
+        logger.info("Reconciliation: checking %d order map entr%s against Tradovate…",
+                    len(coids), "y" if len(coids) == 1 else "ies")
+
+        for coid in coids:
+            stats["checked"] += 1
+            rec = self._order_map.get_by_coid(coid)
+            if rec is None:
+                continue
+            if rec.tradovate_id is None:
+                # No Tradovate replica was ever recorded for this
+                # cOID — either the placeorder is still in flight
+                # (race on startup), or the original IBKR POST never
+                # succeeded. Either way: leave the entry alone, it
+                # will resolve itself.
+                stats["skipped_no_tv_id"] += 1
+                continue
+
+            try:
+                status = self._tradovate.get_order_status(rec.tradovate_id)
+            except TradovateOrderNotFound:
+                logger.info(
+                    "  cOID=%s tv_id=%s → not found on Tradovate, pruning.",
+                    coid, rec.tradovate_id,
+                )
+                self._order_map.remove_by_coid(coid)
+                stats["pruned"] += 1
+                continue
+            except (TradovateOrderError, ValueError) as e:
+                # Don't prune on transient errors — we don't want a
+                # one-off HTTP 503 to wipe valid mappings.
+                logger.warning(
+                    "  cOID=%s tv_id=%s → reconcile error (%s) — leaving as-is.",
+                    coid, rec.tradovate_id, e,
+                )
+                stats["errors"] += 1
+                continue
+
+            if status in self._ACTIVE_STATUSES:
+                stats["kept"] += 1
+                logger.debug("  cOID=%s tv_id=%s → %s (kept).",
+                             coid, rec.tradovate_id, status)
+            else:
+                logger.info(
+                    "  cOID=%s tv_id=%s → %s, pruning.",
+                    coid, rec.tradovate_id, status,
+                )
+                self._order_map.remove_by_coid(coid)
+                stats["pruned"] += 1
+
+        logger.info(
+            "Reconciliation complete: %d kept, %d pruned, %d errors, "
+            "%d skipped (no Tradovate id yet).",
+            stats["kept"], stats["pruned"], stats["errors"],
+            stats["skipped_no_tv_id"],
+        )
+        return stats

@@ -121,6 +121,19 @@ def _build_addon(cfg: Optional[Config] = None) -> TradeSyncAddon:
 
     resolver = IbkrContractResolver()
     replicator = Replicator(cfg=cfg, tradovate=tradovate, resolver=resolver)
+
+    # Reconcile the persistent OrderMap with Tradovate's current
+    # state: orders that filled or were cancelled out-of-band while
+    # the engine was down get pruned, so they don't sit forever in
+    # the map waiting for a DELETE/PUT that will never come.
+    try:
+        replicator.reconcile_with_tradovate()
+    except Exception:
+        log.exception(
+            "OrderMap reconciliation failed — starting with the existing map "
+            "intact. Stale entries (if any) will resolve on first cancel/modify."
+        )
+
     return TradeSyncAddon(
         cfg=cfg, tradovate=tradovate,
         resolver=resolver, replicator=replicator,

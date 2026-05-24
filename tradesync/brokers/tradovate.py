@@ -403,6 +403,68 @@ class TradovateClient:
         return PlacedOrder(order_id=int(order_id), raw=body)
 
     # ------------------------------------------------------------------ #
+    #  Order status query (used by startup reconciliation)                #
+    # ------------------------------------------------------------------ #
+
+    def get_order_status(self, order_id: int) -> str:
+        """
+        GET /order/item?id={order_id} → return the `ordStatus` field
+        ("Working" | "Filled" | "Cancelled" | "Rejected" | "Expired").
+
+        Raises TradovateOrderNotFound when the id is unknown to
+        Tradovate (404 or empty body) — typically because the order
+        has been pruned from the broker's recent-history window.
+        Other transport / parse errors raise TradovateOrderError.
+
+        Used by Replicator.reconcile_with_tradovate() at startup to
+        prune the persistent OrderMap of entries whose underlying
+        order is no longer active.
+        """
+        if not self.connected:
+            raise TradovateOrderError("Not connected — call connect() first")
+        if not isinstance(order_id, int) or order_id <= 0:
+            raise ValueError(f"order_id must be a positive int, got {order_id!r}")
+
+        self._ensure_fresh_token()
+        try:
+            resp = self._http.get(
+                f"{self._api_url}/order/item",
+                params={"id": int(order_id)},
+                headers={"Authorization": f"Bearer {self._access_token}"},
+                timeout=10,
+            )
+        except requests.RequestException as e:
+            raise TradovateOrderError(f"order/item network error: {e}") from e
+
+        if resp.status_code == 404:
+            raise TradovateOrderNotFound(
+                f"order/item id={order_id} → 404 (unknown to Tradovate)"
+            )
+        if resp.status_code != 200:
+            raise TradovateOrderError(
+                f"order/item HTTP {resp.status_code}: {resp.text[:300]}"
+            )
+
+        try:
+            body = resp.json() if resp.content else None
+        except ValueError as e:
+            raise TradovateOrderError(f"order/item returned non-JSON: {e}") from e
+
+        # Tradovate returns {} or null when the id is unknown but the
+        # endpoint itself succeeded.
+        if not body or not isinstance(body, dict):
+            raise TradovateOrderNotFound(
+                f"order/item id={order_id} → empty body"
+            )
+
+        status = body.get("ordStatus") or body.get("status")
+        if not status:
+            raise TradovateOrderError(
+                f"order/item id={order_id} → no ordStatus in body: {body}"
+            )
+        return str(status)
+
+    # ------------------------------------------------------------------ #
     #  Bracket placement (placeoso)                                       #
     # ------------------------------------------------------------------ #
 

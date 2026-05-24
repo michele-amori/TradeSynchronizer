@@ -268,6 +268,16 @@ open. Successful cancels delete their entry; `OrderNotFound` from
 Tradovate (the order already filled or was cancelled out-of-band)
 is logged as a skip and the map entry is tidied up.
 
+**Startup reconciliation.** On every engine start (right after
+authenticating with Tradovate), TradeSynchronizer walks the map
+and calls `GET /order/item?id={tv_id}` for each known Tradovate
+order. Entries whose status is no longer active (Filled,
+Cancelled, Rejected, Expired, or 404) are pruned. Transient errors
+(HTTP 503, network blip) leave the entry untouched on the
+assumption "a stale-but-recoverable map beats wiping valid
+mappings on a flake". The Log tab summarises with
+`Reconciliation complete: N kept, M pruned, K errors`.
+
 ### Bracket / OCO orders
 
 A bracket order (entry + take-profit + stop-loss, OCO-linked)
