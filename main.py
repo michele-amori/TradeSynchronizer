@@ -33,6 +33,7 @@ from typing import Optional
 from tradesync.brokers.ibkr import IbkrContractResolver
 from tradesync.brokers.tradovate import TradovateAuthError, TradovateClient
 from tradesync.config import Config
+from tradesync import preflight
 from tradesync.proxy.addon import TradeSyncAddon
 from tradesync.replicator import Replicator
 
@@ -100,6 +101,7 @@ def _build_addon(cfg: Optional[Config] = None) -> TradeSyncAddon:
     log.info("TradeSynchronizer starting up")
     log.info("Tradovate env=%s, user=%s, pinned_account=%s",
              cfg.tradovate_env, cfg.tradovate_username, cfg.tradovate_acct_id)
+    preflight.run_all()
 
     tradovate = TradovateClient(
         api_url=cfg.tradovate_api_url,

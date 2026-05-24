@@ -104,22 +104,38 @@ Get the Tradovate API key (cid + sec) from
 
 ### 3. Trust the mitmproxy CA on macOS
 
-The proxy intercepts HTTPS traffic from TradingView; for the
-certificates to validate, install and trust the local mitmproxy CA:
+The proxy intercepts HTTPS traffic from TradingView; without this
+step TradingView Desktop will refuse the proxy's TLS certificate
+when talking to `api.ibkr.com` and you'll see a generic SSL error
+in its UI. Run the helper script (idempotent — safe to run again):
 
 ```bash
-# Generates the CA the first time it runs and quits.
-mitmdump --listen-port 8080 -q &
-sleep 2
-kill %1
+./scripts/install_ca_cert.sh
+```
 
-# Add the CA to the system keychain
+It bootstraps the CA via mitmproxy if it doesn't exist yet, then
+calls `sudo security add-trusted-cert` to install it in
+`/Library/Keychains/System.keychain` with `trustRoot` semantics.
+You'll be asked for your macOS password once.
+
+Verify the install at any time without modifying anything:
+
+```bash
+./scripts/install_ca_cert.sh --check
+```
+
+If you'd rather do it by hand:
+
+```bash
+mitmdump --listen-port 18080 -q & sleep 2 && kill %1   # generates CA
 sudo security add-trusted-cert -d -r trustRoot \
      -k /Library/Keychains/System.keychain \
      ~/.mitmproxy/mitmproxy-ca-cert.pem
 ```
 
-You'll only do this once.
+You'll only do this once. Every engine startup runs a pre-flight
+check (see `tradesync/preflight.py`) and logs a clear warning if
+the CA isn't trusted — no more guessing at TLS errors.
 
 ## Daily use — Desktop app (recommended)
 
@@ -224,7 +240,7 @@ The first three keys live in `.env` (shared by both engines);
 | `Could not resolve conid=… not in cache` | Open the chart for that symbol in TradingView once; the contract `/info` response will be observed and cached. Active fallback also works once an IBKR token has been captured. |
 | `Contract 'MESH6' not found on Tradovate` | The symbol resolver produced a symbol Tradovate doesn't recognise. Check the log line "Symbol map: conid=… → IBKR='…' → Tradovate='…'" and verify against Tradovate's contract list. |
 | TradingView doesn't go through the proxy | Quit TradingView completely, then relaunch with `open -a TradingView --args --proxy-server=127.0.0.1:8080`. Chromium-based apps only read the flag at launch. |
-| `SSL: CERTIFICATE_VERIFY_FAILED` from TradingView | Re-run the keychain trust step from §3 of *One-time setup*. |
+| `SSL: CERTIFICATE_VERIFY_FAILED` from TradingView | Run `./scripts/install_ca_cert.sh --check` to confirm the CA isn't trusted, then `./scripts/install_ca_cert.sh` to install. |
 
 ## Order lifecycle: cancellations & modifications
 
