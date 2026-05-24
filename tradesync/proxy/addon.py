@@ -112,13 +112,23 @@ class TradeSyncAddon:
         auth = flow.request.headers.get("Authorization", "")
         if auth:
             self._resolver.capture_token(auth)
+            logger.debug("captured Bearer token, len=%d", len(auth))
 
         if is_new_order_request(flow):
+            logger.debug("➜ NEW ORDER request → %s %s",
+                         flow.request.method, flow.request.path)
             self._handle_new_order_request(flow)
         elif is_cancel_order_request(flow):
+            logger.debug("➜ CANCEL request → %s %s",
+                         flow.request.method, flow.request.path)
             self._handle_cancel_request(flow)
         elif is_modify_order_request(flow):
+            logger.debug("➜ MODIFY request → %s %s",
+                         flow.request.method, flow.request.path)
             self._handle_modify_request(flow)
+        else:
+            logger.debug("(unmatched IBKR request: %s %s — passive only)",
+                         flow.request.method, flow.request.path)
 
     def response(self, flow: http.HTTPFlow) -> None:
         if _IBKR_HOST not in flow.request.pretty_host:
@@ -133,9 +143,16 @@ class TradeSyncAddon:
                 flow.request.path,
                 flow.response.content,
             )
+            logger.debug("(observed contract info from %s — status %d, %d bytes)",
+                         flow.request.path,
+                         flow.response.status_code,
+                         len(flow.response.content or b""))
 
         # New-order POST response: bind cOID ↔ IBKR order_id.
         if is_new_order_request(flow):
+            logger.debug("⇠ NEW ORDER response → status=%d, body=%s",
+                         flow.response.status_code,
+                         (flow.response.content or b"")[:600])
             self._handle_new_order_response(flow)
 
     # ------------------------------------------------------------------ #

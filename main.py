@@ -35,6 +35,7 @@ from tradesync.brokers.tradovate import TradovateAuthError, TradovateClient
 from tradesync.config import Config
 from tradesync import preflight
 from tradesync.proxy.addon import TradeSyncAddon
+from tradesync.proxy.traffic_logger import TrafficLoggerAddon
 from tradesync.replicator import Replicator
 
 
@@ -53,16 +54,23 @@ def _setup_logging(cfg: Config) -> None:
     side and their stdout streams interleave in the Log tab and in
     cfg.log_file, every line is unambiguously attributable.
 
-    The log file path supports `~` (expanded to the user's home) and
-    its parent directory is created on demand. Rotation uses
-    RotatingFileHandler so the file never grows unboundedly. Both
-    engine subprocesses share the same file: the worst case during
-    a concurrent rotation is that one process keeps writing to the
-    just-rotated `.log.1` for a few seconds, which is harmless for
-    personal-use day-trading scale.
+    Two-tier verbosity:
+      * Root logger level = cfg.log_level (INFO by default), so noisy
+        third-party loggers (mitmproxy.*, urllib3, asyncio) stay
+        quiet.
+      * tradesync.* loggers run at DEBUG when
+        cfg.verbose_troubleshooting is True, so OUR diagnostic
+        output is fully captured during calibration; flip the flag
+        off in the GUI later to drop back to INFO.
+
+    The log file path supports `~`, its parent dir is created on
+    demand, and rotation uses RotatingFileHandler. Both engine
+    subprocesses share the same file; worst case during a
+    concurrent rotation is a few seconds of one process writing to
+    the just-rotated `.log.1`, harmless at personal-use scale.
     """
     env_tag = f"[{cfg.tradovate_env.upper()}]"
-    level = getattr(logging, cfg.log_level, logging.INFO)
+    base_level = getattr(logging, cfg.log_level, logging.INFO)
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
 
     log_path = Path(cfg.log_file).expanduser()
@@ -75,18 +83,28 @@ def _setup_logging(cfg: Config) -> None:
             encoding="utf-8",
         ))
     except OSError:
-        # If we can't write the log file (read-only fs, permissions,
-        # etc.) we keep the stream handler so the GUI's Log tab still
-        # gets the merged stdout stream.
+        # Read-only fs or permissions: keep the stream handler so the
+        # GUI's Log tab keeps working in adverse conditions.
         pass
 
     logging.basicConfig(
-        level=level,
+        level=base_level,
         format=f"%(asctime)s %(levelname)-7s {env_tag:<6} %(name)-22s %(message)s",
         datefmt="%H:%M:%S",
         handlers=handlers,
         force=True,
     )
+
+    if cfg.verbose_troubleshooting:
+        # Crank up only tradesync.* — don't drown the log under
+        # mitmproxy/urllib3/asyncio DEBUG chatter.
+        logging.getLogger("tradesync").setLevel(logging.DEBUG)
+        logging.getLogger("tradesync.bootstrap").info(
+            "🔍 VERBOSE_TROUBLESHOOTING is ON — tradesync.* at DEBUG, "
+            "every IBKR request/response will be dumped in full. "
+            "Turn this OFF in the GUI's General tab once the system "
+            "is verified to be replicating cleanly."
+        )
 
 
 def _build_addon(cfg: Optional[Config] = None) -> TradeSyncAddon:
@@ -140,6 +158,24 @@ def _build_addon(cfg: Optional[Config] = None) -> TradeSyncAddon:
     )
 
 
+def _build_all_addons(cfg: Optional[Config] = None) -> list:
+    """
+    Build the list of mitmproxy addons to register: always the core
+    TradeSyncAddon, plus the TrafficLoggerAddon when verbose
+    troubleshooting is enabled. The TrafficLoggerAddon must come
+    FIRST so its request/response hooks fire before TradeSyncAddon's
+    — that way we capture even the requests TradeSyncAddon decides
+    not to act on (account filter, etc.).
+    """
+    cfg = cfg or Config.load()
+    core_addon = _build_addon(cfg)
+    addons: list = []
+    if cfg.verbose_troubleshooting:
+        addons.append(TrafficLoggerAddon(env_label=cfg.tradovate_env))
+    addons.append(core_addon)
+    return addons
+
+
 # ── mitmdump entry point ───────────────────────────────────────────────── #
 # `mitmdump -s main.py` looks for a top-level `addons` list or a
 # `load_addon()` function. Both are supported here; we instantiate
@@ -152,8 +188,10 @@ addons: list = []
 
 def load_addon():
     if not addons:
-        addons.append(_build_addon())
-    return addons[0]
+        addons.extend(_build_all_addons())
+    # mitmproxy accepts either a single addon or a list; we return
+    # the list so multiple addons get registered together.
+    return addons
 
 
 # ── Standalone mode: programmatic mitmproxy ────────────────────────────── #
@@ -163,7 +201,7 @@ def main() -> None:
     from mitmproxy.options import Options
 
     cfg = Config.load()
-    addon = _build_addon(cfg)
+    addon_list = _build_all_addons(cfg)
     log = logging.getLogger("tradesync.bootstrap")
 
     opts = Options(
@@ -174,7 +212,8 @@ def main() -> None:
 
     async def _run():
         master = DumpMaster(opts, with_termlog=False, with_dumper=False)
-        master.addons.add(addon)
+        for a in addon_list:
+            master.addons.add(a)
 
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):

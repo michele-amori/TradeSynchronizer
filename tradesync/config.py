@@ -173,6 +173,14 @@ class Config:
     # reboots; main.py expands the `~` and creates the dir on demand).
     log_file:  str = "~/Library/Logs/TradeSynchronizer/tradesync.log"
 
+    # ── Troubleshooting ──────────────────────────────────────────── #
+    # When True (the calibration default), tradesync.* loggers run at
+    # DEBUG and the TrafficLoggerAddon is registered so we capture
+    # every HTTP transaction TradingView routes through the proxy.
+    # Turn OFF (via the GUI's General tab) once the system is verified
+    # to be replicating cleanly, to keep log volume sane.
+    verbose_troubleshooting: bool = True
+
     # ── Derived ──────────────────────────────────────────────────── #
     @property
     def tradovate_api_url(self) -> str:
@@ -242,6 +250,9 @@ class Config:
         skip_stops_raw = (os.getenv("SKIP_PROTECTIVE_STOPS") or "true").lower()
         skip_stops = skip_stops_raw in ("1", "true", "yes", "on")
 
+        verbose_raw = (os.getenv("VERBOSE_TROUBLESHOOTING") or "true").lower()
+        verbose = verbose_raw in ("1", "true", "yes", "on")
+
         watched_raw = (os.getenv("IBKR_WATCHED_ACCOUNTS") or "").strip()
         watched = [a.strip() for a in watched_raw.split(",") if a.strip()]
 
@@ -272,4 +283,5 @@ class Config:
             log_level=(os.getenv("LOG_LEVEL") or "INFO").upper(),
             log_file=(os.getenv("LOG_FILE")
                       or "~/Library/Logs/TradeSynchronizer/tradesync.log"),
+            verbose_troubleshooting=verbose,
         )

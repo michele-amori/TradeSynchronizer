@@ -289,6 +289,35 @@ The first three keys live in `.env` (shared by both engines);
 | `SKIP_PROTECTIVE_STOPS=true` *(default)* | Don't replicate `STP` / `STP LMT` orders (they're usually protective stop-loss orders on existing IBKR positions, and TradeSyncer's followers manage their own stops) |
 | `IBKR_WATCHED_ACCOUNTS` | Per-engine — set in each file. Only replicate orders from these IBKR account(s); empty = all. Typically the live file watches your live IBKR account (`U…`) and the demo file watches a paper account (`DU…`). |
 
+## Verbose troubleshooting mode (default ON)
+
+While calibrating the system against real Tradovate + real
+TradingView Desktop traffic, the `VERBOSE_TROUBLESHOOTING` flag in
+the General tab (default ON) cranks up the diagnostics so any
+parsing/replication mismatch is visible from the log:
+
+* All `tradesync.*` loggers run at **DEBUG** — every Tradovate HTTP
+  request and response is dumped to the rotating log file
+  (`~/Library/Logs/TradeSynchronizer/tradesync.log`).
+* The proxy registers an additional `TrafficLoggerAddon` that
+  watches all flows passing through mitmproxy. Three tiers:
+  - **api.ibkr.com**: full dump — method, URL, headers, request &
+    response bodies (pretty-printed JSON, capped at 16 KB).
+  - **tradingview.com / charts.tradingview.com / unknown hosts**:
+    one-line summary — method, URL, status, body length.
+  - **Telemetry / analytics / sentry**: silently dropped.
+
+Each mitmproxy flow has an 8-char tag (`flow.id[:8]`) prefixed to
+its log lines so you can `grep` the file for one transaction's
+complete TV→IBKR + IBKR→TV pair.
+
+Third-party loggers (`mitmproxy.*`, `urllib3`, `asyncio`) are NOT
+elevated — they stay at INFO so the diagnostic signal stays clean.
+
+When the first replicated trades have been verified to work
+end-to-end, untick the checkbox (or set `VERBOSE_TROUBLESHOOTING=false`
+in `.env`) and restart the engines: logs drop back to normal.
+
 ## Troubleshooting
 
 | Problem | Fix |

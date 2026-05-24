@@ -142,9 +142,13 @@ class Replicator:
     replicate = replicate_new
 
     def _replicate_new_inner(self, ibkr_order: IbkrOrder) -> ReplicationResult:
+        logger.debug("_replicate_new_inner: entering with %s", ibkr_order)
+
         # ── Policy: account filter ────────────────────────────────────── #
         watched = self._cfg.ibkr_watched_accounts
         if watched and ibkr_order.account_id not in watched:
+            logger.debug("filter HIT: account %s not in watched=%s",
+                         ibkr_order.account_id, watched)
             return ReplicationResult(
                 success=False, skipped=True,
                 reason=f"IBKR account {ibkr_order.account_id} not in watch list",
@@ -152,6 +156,8 @@ class Replicator:
 
         # ── Policy: skip protective stops ────────────────────────────── #
         if self._cfg.skip_protective_stops and ibkr_order.is_protective_stop:
+            logger.debug("filter HIT: protective stop, type=%s",
+                         ibkr_order.order_type)
             return ReplicationResult(
                 success=False, skipped=True,
                 reason=f"Skipping protective {ibkr_order.order_type} order "
@@ -162,6 +168,8 @@ class Replicator:
         # can at least find the cOID even before Tradovate replies.
         if ibkr_order.cOID:
             self._order_map.add_pending(ibkr_order.cOID)
+            logger.debug("order map: added pending entry for cOID=%s",
+                         ibkr_order.cOID)
 
         # ── Symbol resolution: conid → IBKR symbol → Tradovate symbol ── #
         try:

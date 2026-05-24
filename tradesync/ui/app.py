@@ -106,6 +106,12 @@ GENERAL_FIELDS: list[tuple] = [
         "~/Library/Logs/TradeSynchronizer/tradesync.log",
         "Both engines write here, tagged [LIVE] / [DEMO] for disambiguation. "
         "Rotated automatically at 5 MB (5 backups kept). Path supports ~."),
+    ("VERBOSE_TROUBLESHOOTING", "Verbose troubleshooting", "bool", "true",
+        "When ON (the calibration default): tradesync.* loggers run at "
+        "DEBUG and every IBKR HTTP request/response intercepted by the "
+        "proxy is dumped in full to the log file. Use this until the "
+        "system is verified to be replicating cleanly, then turn OFF "
+        "to drop log volume back to normal."),
 ]
 
 PER_ENV_FIELDS: list[tuple] = [

@@ -386,6 +386,8 @@ class TradovateClient:
             payload["stopPrice"] = float(stop_price)
 
         logger.info("Placing Tradovate order: %s", payload)
+        logger.debug("→ POST %s/order/placeorder\n    payload: %s",
+                     self._api_url, payload)
 
         try:
             resp = self._http.post(
@@ -398,7 +400,11 @@ class TradovateClient:
                 timeout=10,
             )
         except requests.RequestException as e:
+            logger.debug("✗ /order/placeorder network error: %s", e)
             raise TradovateOrderError(f"Order request network error: {e}") from e
+
+        logger.debug("← %d %s\n    body: %s",
+                     resp.status_code, "/order/placeorder", resp.text[:1500])
 
         if resp.status_code not in (200, 201):
             raise TradovateOrderError(
@@ -447,6 +453,7 @@ class TradovateClient:
             raise ValueError(f"order_id must be a positive int, got {order_id!r}")
 
         self._ensure_fresh_token()
+        logger.debug("→ GET %s/order/item?id=%d", self._api_url, order_id)
         try:
             resp = self._http.get(
                 f"{self._api_url}/order/item",
@@ -455,7 +462,11 @@ class TradovateClient:
                 timeout=10,
             )
         except requests.RequestException as e:
+            logger.debug("✗ /order/item network error: %s", e)
             raise TradovateOrderError(f"order/item network error: {e}") from e
+
+        logger.debug("← %d /order/item?id=%d  body: %s",
+                     resp.status_code, order_id, resp.text[:600])
 
         if resp.status_code == 404:
             raise TradovateOrderNotFound(
@@ -567,6 +578,8 @@ class TradovateClient:
             payload[slot] = child
 
         logger.info("Placing Tradovate bracket order: %s", payload)
+        logger.debug("→ POST %s/order/placeoso\n    payload: %s",
+                     self._api_url, payload)
 
         try:
             resp = self._http.post(
@@ -579,7 +592,11 @@ class TradovateClient:
                 timeout=15,
             )
         except requests.RequestException as e:
+            logger.debug("✗ /order/placeoso network error: %s", e)
             raise TradovateOrderError(f"placeoso network error: {e}") from e
+
+        logger.debug("← %d /order/placeoso\n    body: %s",
+                     resp.status_code, resp.text[:2000])
 
         if resp.status_code not in (200, 201):
             raise TradovateOrderError(
@@ -655,6 +672,8 @@ class TradovateClient:
 
         payload = {"orderId": int(order_id)}
         logger.info("Cancelling Tradovate order: id=%s", order_id)
+        logger.debug("→ POST %s/order/cancelorder  payload: %s",
+                     self._api_url, payload)
 
         try:
             resp = self._http.post(
@@ -667,8 +686,11 @@ class TradovateClient:
                 timeout=10,
             )
         except requests.RequestException as e:
+            logger.debug("✗ /order/cancelorder network error: %s", e)
             raise TradovateOrderError(f"cancelorder network error: {e}") from e
 
+        logger.debug("← %d /order/cancelorder  body: %s",
+                     resp.status_code, resp.text[:600])
         return self._unpack_lifecycle_response(
             resp, action="cancelorder", order_id=order_id
         )
@@ -717,6 +739,8 @@ class TradovateClient:
             payload["timeInForce"] = tif
 
         logger.info("Modifying Tradovate order: %s", payload)
+        logger.debug("→ POST %s/order/modifyorder  payload: %s",
+                     self._api_url, payload)
 
         try:
             resp = self._http.post(
@@ -729,8 +753,11 @@ class TradovateClient:
                 timeout=10,
             )
         except requests.RequestException as e:
+            logger.debug("✗ /order/modifyorder network error: %s", e)
             raise TradovateOrderError(f"modifyorder network error: {e}") from e
 
+        logger.debug("← %d /order/modifyorder  body: %s",
+                     resp.status_code, resp.text[:600])
         return self._unpack_lifecycle_response(
             resp, action="modifyorder", order_id=order_id
         )

@@ -54,11 +54,15 @@ is keyed by cOID and indexed by IBKR id.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from typing import Optional
 
 from mitmproxy import http
+
+
+logger = logging.getLogger("tradesync.ibkr_parser")
 
 
 # ── URL patterns ─────────────────────────────────────────────────────── #
@@ -209,14 +213,22 @@ def parse_ibkr_order(flow: http.HTTPFlow):
     parent linkage).
     """
     body = _decode_json_body(flow.request.content)
+    logger.debug("parse_ibkr_order: raw body keys=%s, full=%s",
+                 list(body.keys()) if isinstance(body, dict) else type(body).__name__,
+                 body)
     orders = body.get("orders") if isinstance(body, dict) else None
     if not isinstance(orders, list) or not orders:
         raise UnsupportedOrderError(f"Missing 'orders' array in body: {body}")
 
     if len(orders) == 1:
-        return _parse_single_leg(orders[0])
+        parsed = _parse_single_leg(orders[0])
+        logger.debug("parse_ibkr_order: single-leg result = %s", parsed)
+        return parsed
 
-    return _parse_bracket(orders)
+    parsed = _parse_bracket(orders)
+    logger.debug("parse_ibkr_order: bracket result entry=%s children=%d",
+                 parsed.entry, len(parsed.children))
+    return parsed
 
 
 def _parse_single_leg(o: dict) -> IbkrOrder:
