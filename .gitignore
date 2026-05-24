@@ -30,3 +30,6 @@ venv/
 
 # Generated .app bundle (regenerate with ./build_app.sh)
 /TradeSynchronizer.app/
+
+# Tradovate APPLICATION cid/sec (NOT user creds — see the .example file)
+tradesync/_app_credentials.py

@@ -65,8 +65,6 @@ class TestEnvStoreLoad(unittest.TestCase):
         live = (
             "TRADOVATE_USERNAME=u_live\n"
             "TRADOVATE_PASSWORD=p_live\n"
-            "TRADOVATE_CID=cid_live\n"
-            "TRADOVATE_SEC=sec_live\n"
             "PROXY_LISTEN_PORT=8080\n"
             "IBKR_WATCHED_ACCOUNTS=U7713037\n"
         )
@@ -156,11 +154,11 @@ class TestEnvStoreGetSet(unittest.TestCase):
 class TestEnvStoreWrite(unittest.TestCase):
 
     def _populate(self, s: EnvStore):
+        # Note: TRADOVATE_CID/_SEC are intentionally absent — they
+        # moved to tradesync/_app_credentials.py at app level.
         s.per_env["live"] = {
             "TRADOVATE_USERNAME": "u_live",
             "TRADOVATE_PASSWORD": "p_live",
-            "TRADOVATE_CID": "cid_live",
-            "TRADOVATE_SEC": "sec_live",
             "TRADOVATE_ACCOUNT_ID": "1290252",
             "IBKR_WATCHED_ACCOUNTS": "U7713037",
             "PROXY_LISTEN_PORT": "8080",
@@ -168,8 +166,6 @@ class TestEnvStoreWrite(unittest.TestCase):
         s.per_env["demo"] = {
             "TRADOVATE_USERNAME": "u_demo",
             "TRADOVATE_PASSWORD": "p_demo",
-            "TRADOVATE_CID": "cid_demo",
-            "TRADOVATE_SEC": "sec_demo",
             "TRADOVATE_ACCOUNT_ID": "",
             "IBKR_WATCHED_ACCOUNTS": "DU9999999",
             "PROXY_LISTEN_PORT": "8081",

@@ -27,6 +27,73 @@ from typing import List
 from dotenv import dotenv_values
 
 
+class MissingAppCredentialsError(RuntimeError):
+    """Raised when `tradesync/_app_credentials.py` is missing,
+    unparseable, or still contains placeholder values. The error
+    message points the user at the one-time app-registration
+    workflow at trader.tradovate.com → API Access."""
+
+
+def load_app_credentials() -> tuple[str, str]:
+    """
+    Load the Tradovate APPLICATION cid/sec from the gitignored
+    module `tradesync/_app_credentials.py`.
+
+    Environment-variable overrides (TRADOVATE_CID / TRADOVATE_SEC)
+    take precedence — useful for CI, ephemeral container runs, or
+    anyone who'd rather not commit a file at all (even gitignored).
+
+    Returns:
+        (cid, sec)
+
+    Raises:
+        MissingAppCredentialsError with a one-screen explanation of
+        how to register the app and where to put the values.
+    """
+    env_cid = (os.getenv("TRADOVATE_CID") or "").strip()
+    env_sec = (os.getenv("TRADOVATE_SEC") or "").strip()
+    if env_cid and env_sec:
+        return env_cid, env_sec
+
+    try:
+        from tradesync import _app_credentials as creds
+    except ImportError as e:
+        raise MissingAppCredentialsError(
+            "Tradovate application credentials are not configured.\n\n"
+            "Create tradesync/_app_credentials.py from the .example "
+            "template:\n"
+            "    cp tradesync/_app_credentials.py.example "
+            "tradesync/_app_credentials.py\n"
+            "Then register TradeSynchronizer at trader.tradovate.com "
+            "→ API Access → Register an App (one-time, free; works "
+            "with any Tradovate account) and paste the cid + sec "
+            "Tradovate returns into the file.\n\n"
+            f"(original ImportError: {e})"
+        ) from e
+
+    cid = (getattr(creds, "APP_CID", "") or env_cid or "").strip()
+    sec = (getattr(creds, "APP_SEC", "") or env_sec or "").strip()
+    if not cid or not sec:
+        raise MissingAppCredentialsError(
+            "tradesync/_app_credentials.py exists but APP_CID and/or "
+            "APP_SEC are empty. Register TradeSynchronizer at "
+            "trader.tradovate.com → API Access → Register an App "
+            "(one-time, free) and paste the values Tradovate returns. "
+            "See the .example file for the full walkthrough."
+        )
+    return cid, sec
+
+
+def has_app_credentials() -> bool:
+    """Non-raising probe used by the GUI to decide whether to show
+    the 'app not configured' banner."""
+    try:
+        load_app_credentials()
+    except MissingAppCredentialsError:
+        return False
+    return True
+
+
 # Project root (the directory containing this package's parent).
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -144,20 +211,23 @@ class Config:
             )
         _merge_into_environ(env)
 
+        # User credentials (per-env, in .env.<env>): username + password.
         required = {
             "TRADOVATE_USERNAME": os.getenv("TRADOVATE_USERNAME") or "",
             "TRADOVATE_PASSWORD": os.getenv("TRADOVATE_PASSWORD") or "",
-            "TRADOVATE_CID":      os.getenv("TRADOVATE_CID") or "",
-            "TRADOVATE_SEC":      os.getenv("TRADOVATE_SEC") or "",
         }
         missing = [k for k, v in required.items() if not v]
         if missing:
             raise RuntimeError(
-                f"Missing required {env.upper()} credential(s): "
+                f"Missing required {env.upper()} user credential(s): "
                 + ", ".join(missing) +
                 f". Open TradeSynchronizer.app or edit {env_file} and "
                 f"fill them in."
             )
+
+        # App credentials (shared across LIVE and DEMO, app-level):
+        # cid + sec from the gitignored _app_credentials.py module.
+        cid, sec = load_app_credentials()
 
         acct_id_raw = (os.getenv("TRADOVATE_ACCOUNT_ID") or "").strip()
         acct_id = int(acct_id_raw) if acct_id_raw else None
@@ -190,8 +260,8 @@ class Config:
             tradovate_password=required["TRADOVATE_PASSWORD"],
             tradovate_app_id=os.getenv("TRADOVATE_APP_ID") or "TradeSynchronizer",
             tradovate_app_ver=os.getenv("TRADOVATE_APP_VERSION") or "1.0",
-            tradovate_cid=required["TRADOVATE_CID"],
-            tradovate_sec=required["TRADOVATE_SEC"],
+            tradovate_cid=cid,
+            tradovate_sec=sec,
             tradovate_env=env,
             tradovate_acct_id=acct_id,
             proxy_host=os.getenv("PROXY_LISTEN_HOST") or "127.0.0.1",

@@ -76,33 +76,59 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure credentials
+### 2. Register the app once with Tradovate
 
-Three dotenv files at the project root, one per concern, all
-gitignored. The easiest path is to launch `TradeSynchronizer.app`
-and fill the General / Live / Demo tabs — it auto-creates each
-file and writes only the ones you actually edit. For hand-editing,
-the layout is plain `KEY=VALUE` dotenv format:
+Tradovate distinguishes between **application credentials** (cid +
+sec — identify TradeSynchronizer itself as an app to their REST
+API) and **user credentials** (username + password — identify the
+human running it). Application credentials are app-wide; user
+credentials are per-engine (LIVE vs DEMO).
+
+1. Sign in to Tradovate at <https://trader.tradovate.com>. Any
+   Tradovate account works for this step — a free Demo account is
+   enough, and crucially you don't need an "API plan" or a
+   prop-firm account. The app you're registering can later
+   authenticate against ANY Tradovate user (your personal account
+   or a prop-firm sub-account like Apex / TopStep / MFFU).
+2. Click your user icon → *API Access* → *Register an App*. Give
+   it any name and version.
+3. Tradovate returns a **cid** and a **sec**. Copy them.
+4. Create your local credentials file:
+   ```bash
+   cp tradesync/_app_credentials.py.example tradesync/_app_credentials.py
+   ```
+   Paste cid and sec into the two variables. The real file is
+   gitignored, so your secret never lands in a commit.
+
+### 3. Configure per-engine settings
+
+Three dotenv files at the project root, all gitignored:
 
 - **`.env`** — settings shared by every engine: `TRADOVATE_APP_ID`,
   `TRADOVATE_APP_VERSION`, `PROXY_LISTEN_HOST`, `REPLICATION_MODE`,
   `SKIP_PROTECTIVE_STOPS`, `LOG_LEVEL`, `LOG_FILE`.
 - **`.env.live`** — LIVE engine private settings: `TRADOVATE_USERNAME`,
-  `TRADOVATE_PASSWORD`, `TRADOVATE_CID` (a *string*, not an integer),
-  `TRADOVATE_SEC`, `TRADOVATE_ACCOUNT_ID`, `PROXY_LISTEN_PORT`
+  `TRADOVATE_PASSWORD`, `TRADOVATE_ACCOUNT_ID`, `PROXY_LISTEN_PORT`
   (default `8080`), `IBKR_WATCHED_ACCOUNTS`.
 - **`.env.demo`** — DEMO engine private settings: same key set as
-  `.env.live`, but for the paper account. Default port `8081` so
-  DEMO can run alongside LIVE.
+  `.env.live`, but for the paper / second account. Default port
+  `8081` so DEMO can run alongside LIVE.
+
+The easiest workflow:
+1. Launch `TradeSynchronizer.app`.
+2. In the Live (or Demo) tab, fill *Username* and *Password*.
+3. Click **Sign in & pick account**. The dialog authenticates with
+   Tradovate, lists every account visible to the user (including
+   any prop-firm sub-accounts), and lets you pick which one to
+   pin as this engine's LEADER. The picked numeric id lands in the
+   Account ID field automatically.
+4. Save. Done.
 
 Each engine subprocess loads `.env` first and then its env-specific
 file at startup; modifying the DEMO config has zero effect on a
 running LIVE engine because LIVE's file is never touched.
 
-Get the Tradovate API key (cid + sec) from
-<https://trader.tradovate.com/welcome> → *API Access*.
-
-### 3. Trust the mitmproxy CA on macOS
+### 4. Trust the mitmproxy CA on macOS
 
 The proxy intercepts HTTPS traffic from TradingView; without this
 step TradingView Desktop will refuse the proxy's TLS certificate
@@ -236,7 +262,8 @@ The first three keys live in `.env` (shared by both engines);
 
 | Problem | Fix |
 |---|---|
-| `TradovateAuthError: HTTP 401 / Invalid credentials` | Check `TRADOVATE_USERNAME`, `TRADOVATE_PASSWORD`, `TRADOVATE_CID` (must be a string, not int), `TRADOVATE_SEC` in the relevant `.env.live` / `.env.demo` file |
+| `TradovateAuthError: HTTP 401 / Invalid credentials` | Check `TRADOVATE_USERNAME` / `TRADOVATE_PASSWORD` in the relevant `.env.live` / `.env.demo`, and `APP_CID` / `APP_SEC` in `tradesync/_app_credentials.py`. |
+| `MissingAppCredentialsError` at startup | Run §2 of *One-time setup* — register the app at Tradovate and populate `tradesync/_app_credentials.py`. |
 | `Could not resolve conid=… not in cache` | Open the chart for that symbol in TradingView once; the contract `/info` response will be observed and cached. Active fallback also works once an IBKR token has been captured. |
 | `Contract 'MESH6' not found on Tradovate` | The symbol resolver produced a symbol Tradovate doesn't recognise. Check the log line "Symbol map: conid=… → IBKR='…' → Tradovate='…'" and verify against Tradovate's contract list. |
 | TradingView doesn't go through the proxy | Quit TradingView completely, then relaunch with `open -a TradingView --args --proxy-server=127.0.0.1:8080`. Chromium-based apps only read the flag at launch. |

@@ -208,6 +208,27 @@ class TradovateClient:
                 return int(acc["id"])
         return int(resp[0]["id"])
 
+    def list_accounts(self) -> list:
+        """
+        Return every Tradovate account visible to the authenticated
+        user (personal demo, personal live, prop-firm sub-accounts
+        like Apex / TopStep / MFFU — they all show up here once
+        connect() has succeeded).
+
+        Each item is the raw /account/list dict. Useful fields:
+            id           → numeric account id (the LEADER pin)
+            name         → human label (e.g. "APEX-DEMO-12345")
+            accountType  → "Customer" | "Hedger" | …
+            legalStatus  → "Individual" | "Corporation" | …
+            active       → bool
+        """
+        resp = self._authed_get("/account/list")
+        if not isinstance(resp, list):
+            raise TradovateAuthError(
+                f"/account/list returned unexpected shape: {type(resp).__name__}"
+            )
+        return resp
+
     def _ensure_fresh_token(self) -> None:
         """
         Renew the access token when within REFRESH_LEEWAY of expiry.
