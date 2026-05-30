@@ -16,7 +16,8 @@ import unittest
 from pathlib import Path
 
 from tradesync.ui.app import (
-    ENVIRONMENTS, PER_ENV_DEFAULTS, PER_ENV_KEYS, SHARED, EnvStore,
+    ENVIRONMENTS, GENERAL_FIELDS, PER_ENV_DEFAULTS, PER_ENV_FIELDS,
+    PER_ENV_KEYS, SHARED, EnvStore,
 )
 
 
@@ -306,6 +307,102 @@ class TestSnapshotPerFile(unittest.TestCase):
             self.assertNotEqual(before["demo"], after["demo"])
             self.assertEqual(before["live"], after["live"])
             self.assertEqual(before[SHARED], after[SHARED])
+
+
+class TestFieldsAreActuallySerialized(unittest.TestCase):
+    """Regression guard: every key declared in GENERAL_FIELDS /
+    PER_ENV_FIELDS must round-trip through _build_shared /
+    _build_env. Forgetting to add a new field to the writer is
+    what caused the 'Unsaved changes' alert to fire on every
+    engine start — the widget would set a default value into
+    store.shared that the writer then silently dropped, so the
+    next load would never see it and dirty-detection ran in a
+    loop. This test catches that class of bug at write time."""
+
+    @staticmethod
+    def _user_keys(fields) -> set[str]:
+        """The actual settable keys (skip section markers)."""
+        return {f[0] for f in fields if f[0] != "__section__"}
+
+    def test_every_general_field_is_in_build_shared(self):
+        with _TmpEnv() as s:
+            # Seed the store with non-empty placeholders so the
+            # writer can't get away with conditional omission.
+            for key in self._user_keys(GENERAL_FIELDS):
+                s.shared[key] = "test-value-" + key.lower()
+
+            written_text = "\n".join(s._build_shared())
+            missing = [k for k in self._user_keys(GENERAL_FIELDS)
+                       if f"{k}=" not in written_text]
+            self.assertEqual(missing, [],
+                f"GENERAL_FIELDS keys missing from _build_shared(): "
+                f"{missing}. When you add a field to GENERAL_FIELDS, "
+                f"also add a `KEY={{s.get('KEY', default)}}` line to "
+                f"EnvStore._build_shared() — otherwise the GUI's "
+                f"dirty-tracking will see a permanent diff between "
+                f"store.shared (which gets the widget default) and "
+                f"the on-disk file (which doesn't have the line), "
+                f"and the 'Unsaved changes' dialog will fire on "
+                f"every engine start.")
+
+    def test_every_per_env_field_is_in_build_env(self):
+        with _TmpEnv() as s:
+            for env in ENVIRONMENTS:
+                for key in self._user_keys(PER_ENV_FIELDS):
+                    s.per_env[env][key] = "test-value-" + key.lower()
+                written_text = "\n".join(s._build_env(env))
+                missing = [k for k in self._user_keys(PER_ENV_FIELDS)
+                           if f"{k}=" not in written_text]
+                self.assertEqual(missing, [],
+                    f"PER_ENV_FIELDS keys missing from "
+                    f"_build_env({env!r}): {missing}.")
+
+    def test_round_trip_preserves_widget_defaults(self):
+        """The full GUI flow simulated at the store level:
+          1. Empty .env on disk → load → shared is empty
+          2. Widget defaults flushed into shared
+          3. Snapshot taken
+          4. Save (writes shared via _build_shared)
+          5. Re-load from the freshly written file
+          6. After a re-flush from widget defaults, snapshot should
+             match step 3 — anything missed by the writer would
+             surface as a permanent diff here."""
+        with _TmpEnv() as s:
+            s.load()
+            # Step 2: simulate _flush_widgets_to_store loading
+            # widget defaults from GENERAL_FIELDS.
+            for f in GENERAL_FIELDS:
+                if f[0] == "__section__":
+                    continue
+                key, _, kind, default, _ = f
+                s.shared[key] = default if default is not None else ""
+
+            snapshot_before = s.snapshot_per_file()
+
+            # Step 4: write, then re-read fresh from a NEW EnvStore
+            # rooted at the same temp dir.
+            s.write(only={SHARED})
+            s2 = EnvStore(project_root=s.shared_path.parent)
+            s2.load()
+
+            # Step 6: re-flush widget defaults — for any key the
+            # writer DROPPED, this re-injection mimics exactly what
+            # the GUI's first _flush_widgets_to_store does and
+            # would cause the dirty loop.
+            for f in GENERAL_FIELDS:
+                if f[0] == "__section__":
+                    continue
+                key, _, kind, default, _ = f
+                if key not in s2.shared:
+                    s2.shared[key] = default if default is not None else ""
+
+            snapshot_after = s2.snapshot_per_file()
+            self.assertEqual(
+                snapshot_before[SHARED], snapshot_after[SHARED],
+                "shared snapshot drifted across save+reload — "
+                "some GENERAL_FIELDS key isn't being written by "
+                "_build_shared(), which causes the 'Unsaved "
+                "changes' loop on every engine start.")
 
 
 if __name__ == "__main__":

@@ -102,22 +102,34 @@ if $code_touched && ! $readme_touched; then
     echo "" >&2
     dim "If the change affects user-visible behaviour, update README.md."
     echo "" >&2
-    # Read from /dev/tty because stdin is the hook's pipe.
-    if [[ -e /dev/tty ]]; then
+    # Interactivity check. `[[ -e /dev/tty ]]` ALONE is not enough:
+    # the device file exists in many non-interactive contexts (some
+    # CI runners, automated wrappers, MCP-style tool environments),
+    # and a plain `read < /dev/tty` blocks forever there. We need a
+    # working controlling terminal AND a way to read from it without
+    # hanging. Belt-and-suspenders:
+    #   1. `-t 1` confirms stderr is a TTY (where our prompt prints).
+    #   2. `read -t 30` caps any read at 30 s so a misdetected case
+    #      can still complete the commit instead of stalling git.
+    if [[ -t 1 ]] && [[ -e /dev/tty ]]; then
         printf "%bProceed with commit anyway?%b [y/N] " "$BOLD" "$RESET" >&2
-        # Read from /dev/tty because stdin is the hook's pipe.
-        read -r ans < /dev/tty || ans=""
-        # NOTE: macOS ships bash 3.2 — portable `case` rather than
-        # bash-4 ${var,,} lowercase expansion.
-        case "$ans" in y|Y|yes|YES) ans=yes ;; *) ans=no ;; esac
-        if [[ "$ans" == "no" ]]; then
-            err "Aborted by pre-commit (README not updated)."
-            dim "Either update README.md or re-commit with: --no-verify"
-            exit 1
+        ans=""
+        if ! read -t 30 -r ans < /dev/tty 2>/dev/null; then
+            warn "No TTY input within 30 s — proceeding without README update."
+        else
+            # NOTE: macOS ships bash 3.2 — portable `case` rather than
+            # bash-4 ${var,,} lowercase expansion.
+            case "$ans" in y|Y|yes|YES) ans=yes ;; *) ans=no ;; esac
+            if [[ "$ans" == "no" ]]; then
+                err "Aborted by pre-commit (README not updated)."
+                dim "Either update README.md or re-commit with: --no-verify"
+                exit 1
+            fi
+            warn "Proceeding without README update — remember to circle back."
         fi
-        warn "Proceeding without README update — remember to circle back."
     else
-        # Non-interactive context (CI, batch). Don't block — just warn.
+        # Non-interactive context (CI, batch, MCP wrapper). Don't
+        # block — just warn so the human can spot it in the logs.
         warn "Non-interactive shell — proceeding without prompt."
     fi
 else

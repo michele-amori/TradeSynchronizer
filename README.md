@@ -369,6 +369,8 @@ automatically — no code change, no flag to flip.
 | `Contract 'MESH6' not found on Tradovate` | The symbol resolver produced a symbol Tradovate doesn't recognise. Check the log line "Symbol map: conid=… → IBKR='…' → Tradovate='…'" and verify against Tradovate's contract list. |
 | TradingView doesn't go through the proxy | Run `./scripts/launch-tradingview.sh demo` (or `live`) — it quits any running instance first and re-opens with the proxy flag. Chromium-based apps only read `--proxy-server` at launch. |
 | `SSL: CERTIFICATE_VERIFY_FAILED` from TradingView | Run `./scripts/install_ca_cert.sh --check` to confirm the CA isn't trusted, then `./scripts/install_ca_cert.sh` to install. |
+| "Unsaved changes" dialog on every engine start | Pre-fix: a boolean field added to `GENERAL_FIELDS` (e.g. `AUTO_LAUNCH_TRADINGVIEW`, `VERBOSE_TROUBLESHOOTING`) wasn't being written to `.env` by `EnvStore._build_shared()`, so each boot showed permanent drift between memory and disk. Fixed; the test `tests/test_env_store.py::TestFieldsAreActuallySerialized` now guards every `GENERAL_FIELDS` / `PER_ENV_FIELDS` key against this class of bug. If you ever see it again, that test catches it before commit. |
+| Pre-commit hook hangs forever after "README freshness check" | The hook prompts via `/dev/tty` when staged code changes don't touch `README.md`. In non-interactive contexts (CI, MCP tool runners) the read used to block indefinitely; it's now capped at a 30 s timeout and gated on `[[ -t 1 ]]`, so it falls through with a warning instead of stalling. Use `--no-verify` to bypass the whole hook if needed. |
 
 ## Order lifecycle: cancellations & modifications
 

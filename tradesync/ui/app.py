@@ -299,9 +299,13 @@ class EnvStore:
             f"REPLICATION_MODE={s.get('REPLICATION_MODE', 'mirror')}",
             f"SKIP_PROTECTIVE_STOPS={s.get('SKIP_PROTECTIVE_STOPS', 'true')}",
             "",
+            "# ── TradingView Desktop ─────────────────────────────────────────── #",
+            f"AUTO_LAUNCH_TRADINGVIEW={s.get('AUTO_LAUNCH_TRADINGVIEW', 'true')}",
+            "",
             "# ── Logging ─────────────────────────────────────────────────────── #",
             f"LOG_LEVEL={s.get('LOG_LEVEL', 'INFO')}",
             f"LOG_FILE={s.get('LOG_FILE', '~/Library/Logs/TradeSynchronizer/tradesync.log')}",
+            f"VERBOSE_TROUBLESHOOTING={s.get('VERBOSE_TROUBLESHOOTING', 'true')}",
             "",
         ]
 
