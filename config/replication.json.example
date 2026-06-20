@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "pairs": [
+    {
+      "name": "tv-demo->ibkr-paper",
+      "source": {
+        "broker": "tradovate",
+        "env": "demo",
+        "account_id": "YOUR_TRADOVATE_ACCOUNT_ID"
+      },
+      "follower": {
+        "broker": "ibkr",
+        "env": "demo",
+        "account_id": "YOUR_IBKR_PAPER_ACCOUNT"
+      },
+      "enabled": true,
+      "ratio": 1.0
+    },
+    {
+      "name": "tv-demo->ibkr-paper-2 (second follower, separate login)",
+      "source": {
+        "broker": "tradovate",
+        "env": "demo",
+        "account_id": "YOUR_TRADOVATE_ACCOUNT_ID"
+      },
+      "follower": {
+        "broker": "ibkr",
+        "env": "demo",
+        "account_id": "YOUR_SECOND_IBKR_PAPER_ACCOUNT"
+      },
+      "enabled": false,
+      "ratio": 0.5,
+      "_comment": "Multi-follower (separate-login): one Tradovate source can fan out to several IBKR followers at once. A follower on a SEPARATE IBKR login needs its OWN Gateway here (distinct port and/or client_id); omit ibkr_gateway to use the top-level one. Each enabled pair must target a DIFFERENT follower account, and you must run one IB Gateway per distinct login. Validate with two demo followers before any real-money multi-account use.",
+      "ibkr_gateway": {
+        "host": "127.0.0.1",
+        "port": 4012,
+        "client_id": 12
+      }
+    }
+  ],
+  "ibkr_gateway": {
+    "host": "127.0.0.1",
+    "port": 4002,
+    "client_id": 11
+  }
+}

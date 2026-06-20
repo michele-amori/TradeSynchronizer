@@ -1,0 +1,49 @@
+# Credentials — NEVER commit these. Each env's config lives in its
+# own file (.env.live / .env.demo); both are user-local with secrets,
+# so neither belongs in version control.
+.env
+.env.live
+.env.demo
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Logs
+*.log
+/tmp/tradesync.log
+
+# Persistent state (order id maps etc.) — per-env JSON files
+/.tradesync-state/
+
+# Replication routing config — user-local (contains the user's own
+# account ids + gateway). Like the .env files, it's per-setup and not
+# version-controlled; see config/replication.json.example for a template.
+/config/replication.json
+# Local backups of the routing config (created before edits). They
+# contain the user's real account ids, so they must never be committed.
+/config/replication.json.bak-*
+
+# OS noise
+.DS_Store
+# Editor swap files (vim/nvim — appear as .file.swp / .file.swo
+# while the file is open, would otherwise sneak into commits via
+# `git add -A` when the user is mid-edit).
+*.swp
+*.swo
+
+# Generated .app bundle (regenerate with ./build_app.sh)
+/TradeSynchronizer.app/
+
+# Tradovate APPLICATION cid/sec (NOT user creds — see the .example file)
+tradesync/_app_credentials.py
+.coverage

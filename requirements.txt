@@ -1,0 +1,19 @@
+mitmproxy>=10.0.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# IBKR TWS API client, used only when IBKR is the FOLLOWER (the
+# Tradovate→IBKR direction). Talks to a locally-running IB Gateway /
+# TWS over the socket API (port 4001 live / 4002 paper). The PyPI
+# build is older (9.81) than the latest TWS API SDK from IBKR's site,
+# but it negotiates fine with current Gateway builds for the basic
+# order primitives we use (place / cancel / modify / bracket) —
+# verified live against Gateway 10.45 (server protocol v157). If a
+# future need requires newer protocol features, swap this for the
+# official SDK or ib_async; the change is contained to ibkr_api_client.
+ibapi>=9.81.1
+
+# macOS-only: lets the GUI override the menu-bar bundle name so it
+# shows "TradeSynchronizer" instead of the embedded Python framework's
+# default "Python".
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"

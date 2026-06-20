@@ -1,0 +1,2588 @@
+{
+  "captured_at": "2026-06-14T22:02:17.934552+00:00",
+  "env": "demo",
+  "counts": {
+    "pushes": 101,
+    "responses": 2,
+    "other": 0
+  },
+  "pushes": [
+    {
+      "t": 1.867,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "userSessionStats",
+          "eventType": "Updated",
+          "entity": {
+            "id": 3701228,
+            "lastSessionTime": "2026-06-14T22:00:18.623Z",
+            "failedPasswords": 0
+          }
+        }
+      }
+    },
+    {
+      "t": 4.971,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderStrategy",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640014,
+            "accountId": 50000001,
+            "timestamp": "2026-06-14T22:00:22.045Z",
+            "contractId": 4327110,
+            "orderStrategyTypeId": 2,
+            "action": "Buy",
+            "params": "{\"entryVersion\":{\"id\":0,\"orderId\":0,\"orderQty\":1,\"orderType\":\"Limit\",\"price\":29506.25,\"timeInForce\":\"Day\",\"text\":\"Tradingview\"},\"brackets\":[{\"qty\":1,\"profitTarget\":29563.0,\"stopLoss\":29458.5,\"trailingStop\":false,\"absPrice\":true}]}",
+            "status": "InactiveStrategy",
+            "archived": false,
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 4.971,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderStrategy",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640014,
+            "accountId": 50000001,
+            "timestamp": "2026-06-14T22:00:22.045Z",
+            "contractId": 4327110,
+            "orderStrategyTypeId": 2,
+            "action": "Buy",
+            "params": "{\"entryVersion\":{\"id\":0,\"orderId\":0,\"orderQty\":1,\"orderType\":\"Limit\",\"price\":29506.25,\"timeInForce\":\"Day\",\"text\":\"Tradingview\"},\"brackets\":[{\"qty\":1,\"profitTarget\":29563.0,\"stopLoss\":29458.5,\"trailingStop\":false,\"absPrice\":true}]}",
+            "status": "ActiveStrategy",
+            "archived": false,
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 4.971,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "order",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640015,
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:22.045Z",
+            "action": "Buy",
+            "ordStatus": "Unknown",
+            "archived": false,
+            "external": false,
+            "admin": false
+          }
+        }
+      }
+    },
+    {
+      "t": 4.971,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640015,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:22.045Z",
+            "commandType": "New",
+            "commandStatus": "Pending",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "isAutomated": false
+          }
+        }
+      }
+    },
+    {
+      "t": 4.971,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderVersion",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640015,
+            "orderId": 516124640015,
+            "orderQty": 1,
+            "orderType": "Limit",
+            "price": 29506.25,
+            "timeInForce": "Day",
+            "text": "Tradingview"
+          }
+        }
+      }
+    },
+    {
+      "t": 4.972,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640016,
+            "commandId": 516124640015,
+            "timestamp": "2026-06-14T22:00:22.048Z",
+            "commandStatus": "RiskPassed"
+          }
+        }
+      }
+    },
+    {
+      "t": 4.972,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640015,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:22.045Z",
+            "commandType": "New",
+            "commandStatus": "RiskPassed",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "isAutomated": false
+          }
+        }
+      }
+    },
+    {
+      "t": 4.972,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "order",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640015,
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:22.045Z",
+            "action": "Buy",
+            "ordStatus": "PendingNew",
+            "archived": false,
+            "external": false,
+            "admin": false
+          }
+        }
+      }
+    },
+    {
+      "t": 4.973,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderStrategyLink",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640015,
+            "orderStrategyId": 516124640014,
+            "orderId": 516124640015,
+            "label": "256"
+          }
+        }
+      }
+    },
+    {
+      "t": 4.973,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderStrategy",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640014,
+            "accountId": 50000001,
+            "timestamp": "2026-06-14T22:00:22.045Z",
+            "contractId": 4327110,
+            "orderStrategyTypeId": 2,
+            "action": "Buy",
+            "params": "{\"entryVersion\":{\"id\":0,\"orderId\":0,\"orderQty\":1,\"orderType\":\"Limit\",\"price\":29506.25,\"timeInForce\":\"Day\",\"text\":\"Tradingview\"},\"brackets\":[{\"qty\":1,\"profitTarget\":29563.0,\"stopLoss\":29458.5,\"trailingStop\":false,\"absPrice\":true}]}",
+            "status": "ActiveStrategy",
+            "archived": false,
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 4.973,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "order",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640015,
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:22.045Z",
+            "action": "Buy",
+            "ordStatus": "PendingNew",
+            "executionProviderId": 1,
+            "archived": false,
+            "external": false,
+            "admin": false
+          }
+        }
+      }
+    },
+    {
+      "t": 4.976,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "marginSnapshot",
+          "eventType": "Updated",
+          "entity": {
+            "id": 50000001,
+            "timestamp": "2026-06-14T22:00:22.048Z",
+            "riskTimePeriodId": 10,
+            "initialMargin": 0.0,
+            "maintenanceMargin": 0.0,
+            "autoLiqLevel": 0.0,
+            "liqOnlyLevel": 0.0,
+            "totalUsedMargin": 100.0,
+            "fullInitialMargin": 0.0,
+            "positionMargin": 0.0,
+            "totalUsedFullMargin": 4043.0,
+            "openCollateralReq": 0.0
+          }
+        }
+      }
+    },
+    {
+      "t": 4.977,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640017,
+            "commandId": 516124640015,
+            "timestamp": "2026-06-14T22:00:22.050Z",
+            "commandStatus": "AtExecution"
+          }
+        }
+      }
+    },
+    {
+      "t": 4.977,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640015,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:22.045Z",
+            "commandType": "New",
+            "commandStatus": "AtExecution",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "isAutomated": false
+          }
+        }
+      }
+    },
+    {
+      "t": 4.977,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "order",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640015,
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:22.045Z",
+            "action": "Buy",
+            "ordStatus": "Working",
+            "executionProviderId": 1,
+            "archived": false,
+            "external": false,
+            "admin": false
+          }
+        }
+      }
+    },
+    {
+      "t": 4.977,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "executionReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640017,
+            "commandId": 516124640015,
+            "name": "0.008720250226201322",
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:22.048Z",
+            "orderId": 516124640015,
+            "execType": "New",
+            "ordStatus": "Working",
+            "action": "Buy",
+            "externalClOrdId": "0.8828367004722592"
+          }
+        }
+      }
+    },
+    {
+      "t": 4.979,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderStrategy",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640014,
+            "accountId": 50000001,
+            "timestamp": "2026-06-14T22:00:22.045Z",
+            "contractId": 4327110,
+            "orderStrategyTypeId": 2,
+            "action": "Buy",
+            "params": "{\"entryVersion\":{\"id\":0,\"orderId\":0,\"orderQty\":1,\"orderType\":\"Limit\",\"price\":29506.25,\"timeInForce\":\"Day\",\"text\":\"Tradingview\"},\"brackets\":[{\"qty\":1,\"profitTarget\":29563.0,\"stopLoss\":29458.5,\"trailingStop\":false,\"absPrice\":true}]}",
+            "status": "ActiveStrategy",
+            "archived": false,
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 4.979,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "order",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640018,
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:22.051Z",
+            "action": "Sell",
+            "ordStatus": "Unknown",
+            "archived": false,
+            "external": false,
+            "admin": false
+          }
+        }
+      }
+    },
+    {
+      "t": 4.979,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640018,
+            "orderId": 516124640018,
+            "timestamp": "2026-06-14T22:00:22.051Z",
+            "commandType": "New",
+            "commandStatus": "Pending",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "activationTime": "2036-06-13T00:00Z",
+            "isAutomated": true
+          }
+        }
+      }
+    },
+    {
+      "t": 4.979,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderVersion",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640018,
+            "orderId": 516124640018,
+            "orderQty": 1,
+            "orderType": "Limit",
+            "price": 29563.0,
+            "timeInForce": "Day",
+            "text": "Tradingview"
+          }
+        }
+      }
+    },
+    {
+      "t": 4.979,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640019,
+            "commandId": 516124640018,
+            "timestamp": "2026-06-14T22:00:22.051Z",
+            "commandStatus": "OnHold"
+          }
+        }
+      }
+    },
+    {
+      "t": 4.979,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640018,
+            "orderId": 516124640018,
+            "timestamp": "2026-06-14T22:00:22.051Z",
+            "commandType": "New",
+            "commandStatus": "OnHold",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "activationTime": "2036-06-13T00:00Z",
+            "isAutomated": true
+          }
+        }
+      }
+    },
+    {
+      "t": 4.981,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "order",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640018,
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:22.051Z",
+            "action": "Sell",
+            "ordStatus": "Suspended",
+            "archived": false,
+            "external": false,
+            "admin": false
+          }
+        }
+      }
+    },
+    {
+      "t": 4.981,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderStrategyLink",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640018,
+            "orderStrategyId": 516124640014,
+            "orderId": 516124640018,
+            "label": "0"
+          }
+        }
+      }
+    },
+    {
+      "t": 4.981,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "order",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640020,
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:22.051Z",
+            "action": "Sell",
+            "ordStatus": "Unknown",
+            "archived": false,
+            "external": false,
+            "admin": false
+          }
+        }
+      }
+    },
+    {
+      "t": 4.981,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640020,
+            "orderId": 516124640020,
+            "timestamp": "2026-06-14T22:00:22.051Z",
+            "commandType": "New",
+            "commandStatus": "Pending",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "activationTime": "2036-06-13T00:00Z",
+            "isAutomated": true
+          }
+        }
+      }
+    },
+    {
+      "t": 4.982,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderVersion",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640020,
+            "orderId": 516124640020,
+            "orderQty": 1,
+            "orderType": "Stop",
+            "stopPrice": 29458.5,
+            "timeInForce": "Day",
+            "text": "Tradingview"
+          }
+        }
+      }
+    },
+    {
+      "t": 4.982,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640021,
+            "commandId": 516124640020,
+            "timestamp": "2026-06-14T22:00:22.051Z",
+            "commandStatus": "OnHold"
+          }
+        }
+      }
+    },
+    {
+      "t": 4.982,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640020,
+            "orderId": 516124640020,
+            "timestamp": "2026-06-14T22:00:22.051Z",
+            "commandType": "New",
+            "commandStatus": "OnHold",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "activationTime": "2036-06-13T00:00Z",
+            "isAutomated": true
+          }
+        }
+      }
+    },
+    {
+      "t": 4.983,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "order",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640020,
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:22.051Z",
+            "action": "Sell",
+            "ordStatus": "Suspended",
+            "archived": false,
+            "external": false,
+            "admin": false
+          }
+        }
+      }
+    },
+    {
+      "t": 4.983,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderStrategyLink",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640020,
+            "orderStrategyId": 516124640014,
+            "orderId": 516124640020,
+            "label": "0"
+          }
+        }
+      }
+    },
+    {
+      "t": 4.983,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderStrategy",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640014,
+            "accountId": 50000001,
+            "timestamp": "2026-06-14T22:00:22.045Z",
+            "contractId": 4327110,
+            "orderStrategyTypeId": 2,
+            "action": "Buy",
+            "params": "{\"entryVersion\":{\"id\":0,\"orderId\":0,\"orderQty\":1,\"orderType\":\"Limit\",\"price\":29506.25,\"timeInForce\":\"Day\",\"text\":\"Tradingview\"},\"brackets\":[{\"qty\":1,\"profitTarget\":29563.0,\"stopLoss\":29458.5,\"trailingStop\":false,\"absPrice\":true}]}",
+            "status": "ActiveStrategy",
+            "archived": false,
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 12.658,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640022,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:29.738Z",
+            "commandType": "Modify",
+            "commandStatus": "Pending",
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 12.658,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderVersion",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640022,
+            "orderId": 516124640015,
+            "orderQty": 1,
+            "orderType": "Limit",
+            "price": 29513.25,
+            "timeInForce": "Day",
+            "text": "Tradingview"
+          }
+        }
+      }
+    },
+    {
+      "t": 12.659,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640023,
+            "commandId": 516124640022,
+            "timestamp": "2026-06-14T22:00:29.740Z",
+            "commandStatus": "RiskPassed"
+          }
+        }
+      }
+    },
+    {
+      "t": 12.659,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640022,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:29.738Z",
+            "commandType": "Modify",
+            "commandStatus": "RiskPassed",
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 12.66,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640024,
+            "commandId": 516124640022,
+            "timestamp": "2026-06-14T22:00:29.740Z",
+            "commandStatus": "AtExecution"
+          }
+        }
+      }
+    },
+    {
+      "t": 12.661,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640022,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:29.738Z",
+            "commandType": "Modify",
+            "commandStatus": "AtExecution",
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 12.662,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640025,
+            "commandId": 516124640015,
+            "timestamp": "2026-06-14T22:00:29.740Z",
+            "commandStatus": "ExecutionStopped"
+          }
+        }
+      }
+    },
+    {
+      "t": 12.662,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640015,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:22.045Z",
+            "commandType": "New",
+            "commandStatus": "ExecutionStopped",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "isAutomated": false
+          }
+        }
+      }
+    },
+    {
+      "t": 12.662,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "executionReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640024,
+            "commandId": 516124640022,
+            "name": "0.9326405195456737",
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:29.740Z",
+            "orderId": 516124640015,
+            "execType": "Replaced",
+            "ordStatus": "Working",
+            "action": "Buy",
+            "externalClOrdId": "0.8828367004722592"
+          }
+        }
+      }
+    },
+    {
+      "t": 17.851,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640026,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:34.931Z",
+            "commandType": "Modify",
+            "commandStatus": "Pending",
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 17.852,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderVersion",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640026,
+            "orderId": 516124640015,
+            "orderQty": 1,
+            "orderType": "Limit",
+            "price": 29513.25,
+            "timeInForce": "Day",
+            "text": "Tradingview"
+          }
+        }
+      }
+    },
+    {
+      "t": 17.852,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640027,
+            "commandId": 516124640026,
+            "timestamp": "2026-06-14T22:00:34.933Z",
+            "commandStatus": "RiskPassed"
+          }
+        }
+      }
+    },
+    {
+      "t": 17.852,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640026,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:34.931Z",
+            "commandType": "Modify",
+            "commandStatus": "RiskPassed",
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 17.854,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640028,
+            "orderId": 516124640018,
+            "timestamp": "2026-06-14T22:00:34.933Z",
+            "commandType": "Modify",
+            "commandStatus": "Pending",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "activationTime": "2036-06-13T00:00Z"
+          }
+        }
+      }
+    },
+    {
+      "t": 17.856,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderVersion",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640028,
+            "orderId": 516124640018,
+            "orderQty": 1,
+            "orderType": "Limit",
+            "price": 29599.75,
+            "timeInForce": "Day",
+            "text": "Tradingview"
+          }
+        }
+      }
+    },
+    {
+      "t": 17.856,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640028,
+            "orderId": 516124640018,
+            "timestamp": "2026-06-14T22:00:34.933Z",
+            "commandType": "Modify",
+            "commandStatus": "OnHold",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "activationTime": "2036-06-13T00:00Z"
+          }
+        }
+      }
+    },
+    {
+      "t": 17.856,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderVersion",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640028,
+            "orderId": 516124640018,
+            "orderQty": 1,
+            "orderType": "Limit",
+            "price": 29599.75,
+            "timeInForce": "Day",
+            "text": "Tradingview"
+          }
+        }
+      }
+    },
+    {
+      "t": 17.856,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640029,
+            "commandId": 516124640028,
+            "timestamp": "2026-06-14T22:00:34.934Z",
+            "commandStatus": "OnHold"
+          }
+        }
+      }
+    },
+    {
+      "t": 17.856,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640028,
+            "orderId": 516124640018,
+            "timestamp": "2026-06-14T22:00:34.933Z",
+            "commandType": "Modify",
+            "commandStatus": "OnHold",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "activationTime": "2036-06-13T00:00Z"
+          }
+        }
+      }
+    },
+    {
+      "t": 17.856,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640030,
+            "commandId": 516124640026,
+            "timestamp": "2026-06-14T22:00:34.934Z",
+            "commandStatus": "AtExecution"
+          }
+        }
+      }
+    },
+    {
+      "t": 17.856,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640026,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:34.931Z",
+            "commandType": "Modify",
+            "commandStatus": "AtExecution",
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 17.857,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640031,
+            "commandId": 516124640022,
+            "timestamp": "2026-06-14T22:00:34.934Z",
+            "commandStatus": "ExecutionStopped"
+          }
+        }
+      }
+    },
+    {
+      "t": 17.857,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640022,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:29.738Z",
+            "commandType": "Modify",
+            "commandStatus": "ExecutionStopped",
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 17.857,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "executionReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640030,
+            "commandId": 516124640026,
+            "name": "0.14195416669843763",
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:34.933Z",
+            "orderId": 516124640015,
+            "execType": "Replaced",
+            "ordStatus": "Working",
+            "action": "Buy",
+            "externalClOrdId": "0.7570669745453299"
+          }
+        }
+      }
+    },
+    {
+      "t": 23.075,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640032,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:40.153Z",
+            "commandType": "Modify",
+            "commandStatus": "Pending",
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 23.075,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderVersion",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640032,
+            "orderId": 516124640015,
+            "orderQty": 1,
+            "orderType": "Limit",
+            "price": 29513.25,
+            "timeInForce": "Day",
+            "text": "Tradingview"
+          }
+        }
+      }
+    },
+    {
+      "t": 23.075,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640033,
+            "commandId": 516124640032,
+            "timestamp": "2026-06-14T22:00:40.155Z",
+            "commandStatus": "RiskPassed"
+          }
+        }
+      }
+    },
+    {
+      "t": 23.076,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640032,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:40.153Z",
+            "commandType": "Modify",
+            "commandStatus": "RiskPassed",
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 23.076,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640034,
+            "orderId": 516124640020,
+            "timestamp": "2026-06-14T22:00:40.155Z",
+            "commandType": "Modify",
+            "commandStatus": "Pending",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "activationTime": "2036-06-13T00:00Z"
+          }
+        }
+      }
+    },
+    {
+      "t": 23.076,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderVersion",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640034,
+            "orderId": 516124640020,
+            "orderQty": 1,
+            "orderType": "Stop",
+            "stopPrice": 29395.75,
+            "timeInForce": "Day",
+            "text": "Tradingview"
+          }
+        }
+      }
+    },
+    {
+      "t": 23.076,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640034,
+            "orderId": 516124640020,
+            "timestamp": "2026-06-14T22:00:40.155Z",
+            "commandType": "Modify",
+            "commandStatus": "OnHold",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "activationTime": "2036-06-13T00:00Z"
+          }
+        }
+      }
+    },
+    {
+      "t": 23.082,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderVersion",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640034,
+            "orderId": 516124640020,
+            "orderQty": 1,
+            "orderType": "Stop",
+            "stopPrice": 29395.75,
+            "timeInForce": "Day",
+            "text": "Tradingview"
+          }
+        }
+      }
+    },
+    {
+      "t": 23.082,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640035,
+            "commandId": 516124640034,
+            "timestamp": "2026-06-14T22:00:40.155Z",
+            "commandStatus": "OnHold"
+          }
+        }
+      }
+    },
+    {
+      "t": 23.082,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640034,
+            "orderId": 516124640020,
+            "timestamp": "2026-06-14T22:00:40.155Z",
+            "commandType": "Modify",
+            "commandStatus": "OnHold",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "activationTime": "2036-06-13T00:00Z"
+          }
+        }
+      }
+    },
+    {
+      "t": 23.082,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640036,
+            "commandId": 516124640032,
+            "timestamp": "2026-06-14T22:00:40.156Z",
+            "commandStatus": "AtExecution"
+          }
+        }
+      }
+    },
+    {
+      "t": 23.082,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640032,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:40.153Z",
+            "commandType": "Modify",
+            "commandStatus": "AtExecution",
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 23.082,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640037,
+            "commandId": 516124640026,
+            "timestamp": "2026-06-14T22:00:40.156Z",
+            "commandStatus": "ExecutionStopped"
+          }
+        }
+      }
+    },
+    {
+      "t": 23.082,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640026,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:34.931Z",
+            "commandType": "Modify",
+            "commandStatus": "ExecutionStopped",
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 23.083,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "executionReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640036,
+            "commandId": 516124640032,
+            "name": "0.051096301985242495",
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:40.155Z",
+            "orderId": 516124640015,
+            "execType": "Replaced",
+            "ordStatus": "Working",
+            "action": "Buy",
+            "externalClOrdId": "0.8714154324521516"
+          }
+        }
+      }
+    },
+    {
+      "t": 30.587,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640038,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:47.665Z",
+            "commandType": "Cancel",
+            "commandStatus": "Pending",
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 30.587,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640039,
+            "commandId": 516124640038,
+            "timestamp": "2026-06-14T22:00:47.666Z",
+            "commandStatus": "AtExecution"
+          }
+        }
+      }
+    },
+    {
+      "t": 30.587,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640038,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:47.665Z",
+            "commandType": "Cancel",
+            "commandStatus": "AtExecution",
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 30.587,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640040,
+            "commandId": 516124640032,
+            "timestamp": "2026-06-14T22:00:47.666Z",
+            "commandStatus": "ExecutionStopped"
+          }
+        }
+      }
+    },
+    {
+      "t": 30.59,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640032,
+            "orderId": 516124640015,
+            "timestamp": "2026-06-14T22:00:40.153Z",
+            "commandType": "Modify",
+            "commandStatus": "ExecutionStopped",
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 30.59,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "executionReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640039,
+            "commandId": 516124640038,
+            "name": "1.919645254037287",
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:47.666Z",
+            "orderId": 516124640015,
+            "execType": "Canceled",
+            "ordStatus": "Canceled",
+            "action": "Buy",
+            "externalClOrdId": "0.38339044461591426"
+          }
+        }
+      }
+    },
+    {
+      "t": 30.59,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "order",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640015,
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:22.045Z",
+            "action": "Buy",
+            "ordStatus": "Canceled",
+            "executionProviderId": 1,
+            "archived": false,
+            "external": false,
+            "admin": false
+          }
+        }
+      }
+    },
+    {
+      "t": 30.59,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640041,
+            "orderId": 516124640018,
+            "timestamp": "2026-06-14T22:00:47.666Z",
+            "commandType": "Cancel",
+            "commandStatus": "Pending",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "isAutomated": true
+          }
+        }
+      }
+    },
+    {
+      "t": 30.59,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640042,
+            "commandId": 516124640041,
+            "timestamp": "2026-06-14T22:00:47.666Z",
+            "commandStatus": "AtExecution"
+          }
+        }
+      }
+    },
+    {
+      "t": 30.59,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640041,
+            "orderId": 516124640018,
+            "timestamp": "2026-06-14T22:00:47.666Z",
+            "commandType": "Cancel",
+            "commandStatus": "AtExecution",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "isAutomated": true
+          }
+        }
+      }
+    },
+    {
+      "t": 30.59,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640043,
+            "commandId": 516124640018,
+            "timestamp": "2026-06-14T22:00:47.666Z",
+            "commandStatus": "ExecutionStopped"
+          }
+        }
+      }
+    },
+    {
+      "t": 30.59,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640018,
+            "orderId": 516124640018,
+            "timestamp": "2026-06-14T22:00:22.051Z",
+            "commandType": "New",
+            "commandStatus": "ExecutionStopped",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "activationTime": "2036-06-13T00:00Z",
+            "isAutomated": true
+          }
+        }
+      }
+    },
+    {
+      "t": 30.59,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640044,
+            "commandId": 516124640028,
+            "timestamp": "2026-06-14T22:00:47.666Z",
+            "commandStatus": "ExecutionStopped"
+          }
+        }
+      }
+    },
+    {
+      "t": 30.591,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640028,
+            "orderId": 516124640018,
+            "timestamp": "2026-06-14T22:00:34.933Z",
+            "commandType": "Modify",
+            "commandStatus": "ExecutionStopped",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "activationTime": "2036-06-13T00:00Z"
+          }
+        }
+      }
+    },
+    {
+      "t": 30.591,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "order",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640018,
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:22.051Z",
+            "action": "Sell",
+            "ordStatus": "Canceled",
+            "archived": false,
+            "external": false,
+            "admin": false
+          }
+        }
+      }
+    },
+    {
+      "t": 30.593,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640045,
+            "orderId": 516124640020,
+            "timestamp": "2026-06-14T22:00:47.667Z",
+            "commandType": "Cancel",
+            "commandStatus": "Pending",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "isAutomated": true
+          }
+        }
+      }
+    },
+    {
+      "t": 30.593,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640046,
+            "commandId": 516124640045,
+            "timestamp": "2026-06-14T22:00:47.667Z",
+            "commandStatus": "AtExecution"
+          }
+        }
+      }
+    },
+    {
+      "t": 30.593,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640045,
+            "orderId": 516124640020,
+            "timestamp": "2026-06-14T22:00:47.667Z",
+            "commandType": "Cancel",
+            "commandStatus": "AtExecution",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "isAutomated": true
+          }
+        }
+      }
+    },
+    {
+      "t": 30.593,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640047,
+            "commandId": 516124640020,
+            "timestamp": "2026-06-14T22:00:47.667Z",
+            "commandStatus": "ExecutionStopped"
+          }
+        }
+      }
+    },
+    {
+      "t": 30.593,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640020,
+            "orderId": 516124640020,
+            "timestamp": "2026-06-14T22:00:22.051Z",
+            "commandType": "New",
+            "commandStatus": "ExecutionStopped",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "activationTime": "2036-06-13T00:00Z",
+            "isAutomated": true
+          }
+        }
+      }
+    },
+    {
+      "t": 30.593,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "commandReport",
+          "eventType": "Created",
+          "entity": {
+            "id": 516124640048,
+            "commandId": 516124640034,
+            "timestamp": "2026-06-14T22:00:47.667Z",
+            "commandStatus": "ExecutionStopped"
+          }
+        }
+      }
+    },
+    {
+      "t": 30.593,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "command",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640034,
+            "orderId": 516124640020,
+            "timestamp": "2026-06-14T22:00:40.155Z",
+            "commandType": "Modify",
+            "commandStatus": "ExecutionStopped",
+            "senderId": 3701228,
+            "userSessionId": 2662848376,
+            "activationTime": "2036-06-13T00:00Z"
+          }
+        }
+      }
+    },
+    {
+      "t": 30.594,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "order",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640020,
+            "accountId": 50000001,
+            "contractId": 4327110,
+            "timestamp": "2026-06-14T22:00:22.051Z",
+            "action": "Sell",
+            "ordStatus": "Canceled",
+            "archived": false,
+            "external": false,
+            "admin": false
+          }
+        }
+      }
+    },
+    {
+      "t": 30.594,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "orderStrategy",
+          "eventType": "Updated",
+          "entity": {
+            "id": 516124640014,
+            "accountId": 50000001,
+            "timestamp": "2026-06-14T22:00:22.045Z",
+            "contractId": 4327110,
+            "orderStrategyTypeId": 2,
+            "action": "Buy",
+            "params": "{\"entryVersion\":{\"id\":0,\"orderId\":0,\"orderQty\":1,\"orderType\":\"Limit\",\"price\":29506.25,\"timeInForce\":\"Day\",\"text\":\"Tradingview\"},\"brackets\":[{\"qty\":1,\"profitTarget\":29563.0,\"stopLoss\":29458.5,\"trailingStop\":false,\"absPrice\":true}]}",
+            "status": "ExecutionInterrupted",
+            "archived": false,
+            "senderId": 3701228,
+            "userSessionId": 2662848376
+          }
+        }
+      }
+    },
+    {
+      "t": 30.594,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "marginSnapshot",
+          "eventType": "Updated",
+          "entity": {
+            "id": 50000001,
+            "timestamp": "2026-06-14T22:00:47.667Z",
+            "riskTimePeriodId": 10,
+            "initialMargin": 0.0,
+            "maintenanceMargin": 0.0,
+            "autoLiqLevel": 0.0,
+            "liqOnlyLevel": 0.0,
+            "totalUsedMargin": 0.0,
+            "fullInitialMargin": 0.0,
+            "positionMargin": 0.0,
+            "totalUsedFullMargin": 0.0,
+            "openCollateralReq": 0.0
+          }
+        }
+      }
+    },
+    {
+      "t": 61.066,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "userSessionStats",
+          "eventType": "Updated",
+          "entity": {
+            "id": 3701228,
+            "lastSessionTime": "2026-06-14T22:01:18.135Z",
+            "failedPasswords": 0
+          }
+        }
+      }
+    },
+    {
+      "t": 61.949,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "userDevice",
+          "eventType": "Updated",
+          "entity": {
+            "id": 11662491,
+            "userId": 3701228,
+            "timestamp": "2026-06-01T22:38:00.879Z",
+            "deviceId": "****7dfd",
+            "updateTimestamp": "2026-06-14T22:01:18.892Z",
+            "archived": false,
+            "clientAppId": 1,
+            "appId": "tradovate_trader(web)",
+            "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+            "ipAddress": "/203.0.113.10",
+            "country": "ZZ"
+          }
+        }
+      }
+    },
+    {
+      "t": 65.368,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "userDevice",
+          "eventType": "Updated",
+          "entity": {
+            "id": 11804088,
+            "userId": 3701228,
+            "timestamp": "2026-06-08T12:37:09.876Z",
+            "deviceId": "****7dfd",
+            "updateTimestamp": "2026-06-14T22:01:22.432Z",
+            "archived": false,
+            "clientAppId": 7742,
+            "appId": "TradingView",
+            "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+            "ipAddress": "/203.0.113.10",
+            "country": "ZZ",
+            "approval": true
+          }
+        }
+      }
+    },
+    {
+      "t": 66.352,
+      "msg": {
+        "e": "props",
+        "d": {
+          "entityType": "userDevice",
+          "eventType": "Updated",
+          "entity": {
+            "id": 11804088,
+            "userId": 3701228,
+            "timestamp": "2026-06-08T12:37:09.876Z",
+            "deviceId": "****7dfd",
+            "updateTimestamp": "2026-06-14T22:01:23.420Z",
+            "archived": false,
+            "clientAppId": 7742,
+            "appId": "TradingView",
+            "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+            "ipAddress": "/203.0.113.20",
+            "country": "ZZ",
+            "approval": true
+          }
+        }
+      }
+    }
+  ],
+  "responses": [
+    {
+      "t": 1.545,
+      "msg": {
+        "s": 200,
+        "i": 1
+      }
+    },
+    {
+      "t": 1.741,
+      "msg": {
+        "s": 200,
+        "i": 2,
+        "d": {
+          "users": [
+            {
+              "id": 3701228,
+              "name": "demouser",
+              "timestamp": "2025-02-27T00:38:53.141Z",
+              "userType": "Trader",
+              "email": "demo.user@example.com",
+              "status": "Active",
+              "creationTimestamp": "2024-10-14T21:15:20.821Z",
+              "professional": false,
+              "hibernated": false
+            }
+          ],
+          "userProperties": [
+            {
+              "id": 21982362,
+              "userId": 3701228,
+              "propertyId": 60,
+              "value": "true"
+            },
+            {
+              "id": 6132753,
+              "userId": 3701228,
+              "propertyId": 24,
+              "value": "en"
+            },
+            {
+              "id": 29249988,
+              "userId": 3701228,
+              "propertyId": 9,
+              "value": "{\"workingOrder\":false,\"fill\":false,\"canceledOrder\":false,\"rejectedOrder\":false,\"alert\":false,\"chat\":false,\"notification\":false}"
+            },
+            {
+              "id": 9302586,
+              "userId": 3701228,
+              "propertyId": 45,
+              "value": ""
+            },
+            {
+              "id": 4934357,
+              "userId": 3701228,
+              "propertyId": 15,
+              "value": "22 September 2025"
+            },
+            {
+              "id": 7093855,
+              "userId": 3701228,
+              "propertyId": 21,
+              "value": "{\"checked\":[{\"id\":1,\"name\":\"I understand futures trading\"},{\"id\":2,\"name\":\"I understand futures margins and Tradovate's margin policy\"},{\"id\":3,\"name\":\"I understand futures regulatory fees, exchange fees and Tradovate's commission plans\"},{\"id\":4,\"name\":\"I understand the definition of wash trades and agree to comply with all applicable regulations regarding wash trades\"},{\"id\":5,\"name\":\"I understand and agree to comply with regulations related to Anti Money Laundering\"},{\"id\":6,\"name\":\"I understand Exchange position limits\"},{\"id\":7,\"name\":\"I understand the requirement to properly designate any automated orders as \\\"Algorithmic\\\" should they meet the requiremets\"},{\"id\":8,\"name\":\"I understand sanctions which may be levied by either the Exchange or Tradovate for any service abuses\"},{\"id\":9,\"name\":\"I understand Tradovate's restrictions related to back month trading\"},{\"id\":10,\"name\":\"I understand how to access Tradovate's API documentation\"},{\"id\":11,\"name\":\"I understand where to find coding examples related to Tradovate's API\"},{\"id\":12,\"name\":\"I understand how to access the Tradovate Community for community support and resources\"},{\"id\":13,\"name\":\"I understand that I can contact Tradovate Support only in the event there is a bug or issue with the Tradovate API\"},{\"id\":14,\"name\":\"I understand how to check Tradovate's Service Status\"},{\"id\":15,\"name\":\"I understand that Tradovate offers a trading front end (Tradovate Trader) that can be used for monitoring, placing, modifying and cancelling orders among other functions\"},{\"id\":16,\"name\":\"I understand all of the order types offered by Tradovate and their limitations\"},{\"id\":17,\"name\":\"I understand how to calculate account performance values in real-time including but not limited to: Open and Realized P/L, Account Net Liquidating Value, Margin Requirements\"},{\"id\":18,\"name\":\"I understand the importance of supplying a Device ID in support of Tradovate's 2-Factor Authentication function\"},{\"id\":19,\"name\":\"I understand Tradovate\u2019s right to disconnect more than one connection associated with a user\"},{\"id\":20,\"name\":\"I understand Tradovate\u2019s right to liquidate positions\"},{\"id\":21,\"name\":\"I understand Tradovate's basic rate limits\"},{\"id\":22,\"name\":\"I understand Tradovate's time penalty mechanism\"},{\"id\":23,\"name\":\"I understand Tradovate's right to change limits without prior notification\"},{\"id\":24,\"name\":\"I understand how tradovate throttles requests\"},{\"id\":25,\"name\":\"I understand Tradovate may throttle market data depending on market status and connectivity\"},{\"id\":26,\"name\":\"I understand Tradovate's enforced flood control rules\"},{\"id\":27,\"name\":\"I understand how to set Account Risk limits in Tradovate via the Tradovate Trader application\"},{\"id\":28,\"name\":\"I understand how to set the appropriate permission scope for each key which will be used for API connectivity\"},{\"id\":29,\"name\":\"I understand that there is a possibility that 3rd party libraries may contain malicious code\"},{\"id\":30,\"name\":\"I understand the risks of using a 3rd party application or service in conjunction with my account\"},{\"id\":31,\"name\":\"I understand that redistribution of market data either directly or in derived works is strictly prohibited\"},{\"id\":32,\"name\":\"I understand that my user has an associated simulation account that can and should be used for testing purposes\"}]}"
+            },
+            {
+              "id": 6132756,
+              "userId": 3701228,
+              "propertyId": 18,
+              "value": "09 December 2022"
+            }
+          ],
+          "properties": [],
+          "accounts": [
+            {
+              "id": 50000001,
+              "name": "DEMO3701228",
+              "userId": 3701228,
+              "accountType": "Customer",
+              "restricted": false,
+              "closed": false,
+              "clearingHouseId": 2,
+              "riskCategoryId": 2,
+              "autoLiqProfileId": 1,
+              "marginAccountType": "Speculator",
+              "legalStatus": "Individual",
+              "archived": false,
+              "timestamp": "2026-05-24T19:52:12Z",
+              "active": true
+            }
+          ],
+          "accountRiskStatuses": [
+            {
+              "id": 50000001,
+              "maxNetLiq": 50000.0,
+              "maxNetLiqTimestamp": "2026-05-24T19:52:11.941Z",
+              "minNetLiq": 50000.0,
+              "minNetLiqTimestamp": "2026-05-24T19:52:12Z"
+            }
+          ],
+          "marginSnapshots": [
+            {
+              "id": 50000001,
+              "timestamp": "2026-05-24T19:52:12.209Z",
+              "riskTimePeriodId": 10,
+              "initialMargin": 0.0,
+              "maintenanceMargin": 0.0,
+              "autoLiqLevel": 0.0,
+              "liqOnlyLevel": 0.0,
+              "totalUsedMargin": 0.0,
+              "fullInitialMargin": 0.0,
+              "positionMargin": 0.0,
+              "totalUsedFullMargin": 0.0,
+              "openCollateralReq": 0.0
+            }
+          ],
+          "userAccountAutoLiqs": [
+            {
+              "id": 50000001
+            }
+          ],
+          "cashBalances": [
+            {
+              "id": 516124640012,
+              "accountId": 50000001,
+              "timestamp": "2026-06-13T21:04:22.084Z",
+              "tradeDate": {
+                "year": 2026,
+                "month": 6,
+                "day": 13
+              },
+              "currencyId": 1,
+              "amount": 50000.0,
+              "realizedPnL": 0.0,
+              "weekRealizedPnL": 0.0,
+              "archived": false,
+              "amountSOD": 50000.0
+            }
+          ],
+          "currencies": [
+            {
+              "id": 12,
+              "name": "GBP_PHILLIP",
+              "symbol": "GBP_PHILLIP"
+            },
+            {
+              "id": 9,
+              "name": "CHF",
+              "symbol": "CHF"
+            },
+            {
+              "id": 1,
+              "name": "USD",
+              "symbol": "$"
+            },
+            {
+              "id": 13,
+              "name": "TEST",
+              "symbol": "TEST"
+            },
+            {
+              "id": 5,
+              "name": "CAD",
+              "symbol": "CAD"
+            },
+            {
+              "id": 2,
+              "name": "EUR",
+              "symbol": "EUR"
+            },
+            {
+              "id": 6,
+              "name": "JPY",
+              "symbol": "JPY"
+            },
+            {
+              "id": 3,
+              "name": "AUD",
+              "symbol": "AUD"
+            },
+            {
+              "id": 10,
+              "name": "EUR_PHILLIP",
+              "symbol": "EUR_PHILLIP"
+            },
+            {
+              "id": 7,
+              "name": "MXN",
+              "symbol": "MXN"
+            },
+            {
+              "id": 4,
+              "name": "GBP",
+              "symbol": "GBP"
+            },
+            {
+              "id": 14,
+              "name": "AUD_PHILLIP",
+              "symbol": "AUD_PHILLIP"
+            },
+            {
+              "id": 11,
+              "name": "JPY_PHILLIP",
+              "symbol": "JPY_PHILLIP"
+            },
+            {
+              "id": 8,
+              "name": "NZD",
+              "symbol": "NZD"
+            }
+          ],
+          "positions": [],
+          "fillPairs": [],
+          "orders": [],
+          "contracts": [],
+          "contractMaturities": [],
+          "products": [],
+          "exchanges": [
+            {
+              "id": 15,
+              "name": "Coinbase Derivatives",
+              "complex": "FREX",
+              "timeZone": "CST",
+              "isSecuredDefault": true,
+              "cftcReporting": true,
+              "freeMarketData": "AnyClientApp",
+              "marketType": "Futures",
+              "span": "FRE",
+              "foreignExchange": false
+            },
+            {
+              "id": 12,
+              "name": "Coinbase",
+              "complex": "Coinbase",
+              "timeZone": "EST",
+              "isSecuredDefault": false,
+              "cftcReporting": false,
+              "freeMarketData": "TradovateApp",
+              "marketType": "Crypto",
+              "foreignExchange": false
+            },
+            {
+              "id": 9,
+              "name": "ICE Futures US",
+              "complex": "ICE",
+              "timeZone": "CST",
+              "isSecuredDefault": false,
+              "cftcReporting": false,
+              "freeMarketData": "None",
+              "marketType": "Futures",
+              "span": "N",
+              "foreignExchange": false,
+              "directCqgOnlyMarketData": true
+            },
+            {
+              "id": 19,
+              "name": "Kalshi",
+              "complex": "None",
+              "timeZone": "EST",
+              "isSecuredDefault": false,
+              "cftcReporting": true,
+              "freeMarketData": "AnyClientApp",
+              "marketType": "Futures",
+              "foreignExchange": false
+            },
+            {
+              "id": 1,
+              "name": "CBOT",
+              "complex": "CME",
+              "timeZone": "CST",
+              "isSecuredDefault": false,
+              "cftcReporting": true,
+              "freeMarketData": "None",
+              "marketType": "Futures",
+              "span": "CBT",
+              "tradingviewGroups": "cbot,cbot_mini",
+              "foreignExchange": false
+            },
+            {
+              "id": 16,
+              "name": "CME EC",
+              "complex": "CME",
+              "timeZone": "CST",
+              "isSecuredDefault": false,
+              "cftcReporting": true,
+              "freeMarketData": "AnyClientApp",
+              "marketType": "Futures",
+              "span": "CME",
+              "foreignExchange": false
+            },
+            {
+              "id": 13,
+              "name": "SMALL",
+              "complex": "SMALL",
+              "timeZone": "CST",
+              "isSecuredDefault": false,
+              "cftcReporting": false,
+              "freeMarketData": "AnyClientApp",
+              "marketType": "Futures",
+              "foreignExchange": false
+            },
+            {
+              "id": 5,
+              "name": "ICE Europe Financials",
+              "complex": "LIFFE",
+              "timeZone": "CST",
+              "isSecuredDefault": true,
+              "cftcReporting": false,
+              "freeMarketData": "None",
+              "marketType": "Futures",
+              "span": "L",
+              "foreignExchange": true
+            },
+            {
+              "id": 2,
+              "name": "CME",
+              "complex": "CME",
+              "timeZone": "CST",
+              "isSecuredDefault": false,
+              "cftcReporting": true,
+              "freeMarketData": "None",
+              "marketType": "Futures",
+              "span": "CME",
+              "tradingviewGroups": "cme,cme_mini",
+              "foreignExchange": false
+            },
+            {
+              "id": 20,
+              "name": "Bitnomial",
+              "complex": "Bitnomial",
+              "timeZone": "CST",
+              "isSecuredDefault": false,
+              "cftcReporting": true,
+              "freeMarketData": "AnyClientApp",
+              "marketType": "Futures",
+              "foreignExchange": false
+            },
+            {
+              "id": 17,
+              "name": "CBOE",
+              "complex": "COMP",
+              "timeZone": "CST",
+              "isSecuredDefault": false,
+              "cftcReporting": false,
+              "freeMarketData": "None",
+              "marketType": "Futures",
+              "foreignExchange": false
+            },
+            {
+              "id": 6,
+              "name": "EUREX",
+              "complex": "EUREX",
+              "timeZone": "CST",
+              "isSecuredDefault": true,
+              "cftcReporting": false,
+              "freeMarketData": "None",
+              "marketType": "Futures",
+              "tradingviewGroups": "eurex_futures",
+              "foreignExchange": true
+            },
+            {
+              "id": 21,
+              "name": "MOCK",
+              "complex": "Mock",
+              "timeZone": "CST",
+              "isSecuredDefault": false,
+              "cftcReporting": false,
+              "freeMarketData": "AnyClientApp",
+              "marketType": "Futures",
+              "foreignExchange": false
+            },
+            {
+              "id": 3,
+              "name": "NYMEX",
+              "complex": "CME",
+              "timeZone": "CST",
+              "isSecuredDefault": false,
+              "cftcReporting": true,
+              "freeMarketData": "None",
+              "marketType": "Futures",
+              "span": "NYM",
+              "tradingviewGroups": "nymex,nymex_mini",
+              "foreignExchange": false
+            },
+            {
+              "id": 18,
+              "name": "OMX",
+              "complex": "COMP",
+              "timeZone": "CST",
+              "isSecuredDefault": false,
+              "cftcReporting": false,
+              "freeMarketData": "None",
+              "marketType": "Futures",
+              "foreignExchange": false
+            },
+            {
+              "id": 10,
+              "name": "ICE Europe Commodities",
+              "complex": "ICE",
+              "timeZone": "CST",
+              "isSecuredDefault": true,
+              "cftcReporting": false,
+              "freeMarketData": "None",
+              "marketType": "Futures",
+              "span": "I",
+              "foreignExchange": true
+            },
+            {
+              "id": 7,
+              "name": "MGE",
+              "complex": "CME",
+              "timeZone": "CST",
+              "isSecuredDefault": false,
+              "cftcReporting": true,
+              "freeMarketData": "AnyClientApp",
+              "marketType": "Futures",
+              "span": "MGE",
+              "foreignExchange": false
+            },
+            {
+              "id": 4,
+              "name": "COMEX",
+              "complex": "CME",
+              "timeZone": "CST",
+              "isSecuredDefault": false,
+              "cftcReporting": true,
+              "freeMarketData": "None",
+              "marketType": "Futures",
+              "span": "CMX",
+              "tradingviewGroups": "comex,comex_mini",
+              "foreignExchange": false
+            },
+            {
+              "id": 14,
+              "name": "Equities",
+              "complex": "Equities",
+              "timeZone": "EST",
+              "isSecuredDefault": false,
+              "cftcReporting": false,
+              "freeMarketData": "None",
+              "marketType": "Equities",
+              "foreignExchange": false
+            },
+            {
+              "id": 11,
+              "name": "Dow Jones & Key Indices",
+              "complex": "COMP",
+              "timeZone": "CST",
+              "isSecuredDefault": false,
+              "cftcReporting": false,
+              "freeMarketData": "None",
+              "marketType": "Futures",
+              "foreignExchange": false
+            },
+            {
+              "id": 8,
+              "name": "LIFFE",
+              "complex": "LIFFE",
+              "timeZone": "CST",
+              "isSecuredDefault": true,
+              "cftcReporting": false,
+              "freeMarketData": "None",
+              "marketType": "Futures",
+              "foreignExchange": false
+            }
+          ],
+          "spreadDefinitions": [],
+          "commands": [],
+          "commandReports": [],
+          "executionReports": [],
+          "orderVersions": [],
+          "fills": [],
+          "fillFees": [],
+          "orderStrategies": [],
+          "orderStrategyLinks": [],
+          "userPlugins": [
+            {
+              "id": 29179040,
+              "userId": 3701228,
+              "timestamp": "2026-06-03T16:06:43.439Z",
+              "planPrice": 25.0,
+              "cashBalanceLogId": 11978726094,
+              "accountId": 99049000001,
+              "archived": false,
+              "pluginName": "apiAccess",
+              "approval": true,
+              "entitlementId": 35,
+              "startDate": {
+                "year": 2026,
+                "month": 6,
+                "day": 3
+              },
+              "expirationDate": {
+                "year": 2026,
+                "month": 7,
+                "day": 3
+              },
+              "paidAmount": 25.0,
+              "autorenewal": true,
+              "planCategories": "Active;Advanced;NONE;Active Trader Plan;Commission Free Membership;Micro E-Mini Promotion;Micro Promotion;TakeProfitTrader;Apex;Theotrade;Monthly Account;Lifetime Account;JustFundTrading;EliteTraderFunding;BluSky;Tradeify;EmergeProfit;LifeUpTrading;AlphaFutures;MyFundedFutures;FundedNext;FundingTicks;GoatFundedFutures;FundingFutures;FxifyFutures;Topstep;Legacy;2025NEW;FundedFuturesFamily;LucidTrading;BrandonTestOrg;TopOneFutures;BlueGuardianFutures;BlueRowCap;Apteros; E8Markets;FuturesElite;CHYProdTestOrg;HolaPrime;Tradovate - Sim;PhidiasPropFirm;TX3Funding;AquaFutures"
+            },
+            {
+              "id": 29690489,
+              "userId": 3701228,
+              "timestamp": "2026-06-09T05:27:00.594Z",
+              "planPrice": 9.99,
+              "cashBalanceLogId": 16466739460,
+              "accountId": 99049000001,
+              "archived": false,
+              "pluginName": "tradingview",
+              "approval": true,
+              "entitlementId": 27,
+              "startDate": {
+                "year": 2026,
+                "month": 6,
+                "day": 9
+              },
+              "expirationDate": {
+                "year": 2026,
+                "month": 7,
+                "day": 9
+              },
+              "paidAmount": 9.99,
+              "autorenewal": true,
+              "planCategories": "TRIAL;Active;Advanced;ATO;NONE;Active Trader Plan;Commission Free Membership;Topstep;SpeedUp;Theotrade;Micro E-Mini Promotion;AXIA FUTURES;Micro Promotion;Tradovate - Sim;TradeDay;NT;Monthly Account;Lifetime Account;NT Lifetime;Legacy;2025NEW;BluSky;LucidTrading;TradeDay;Tradeify;FxifyFutures;TheTradingPit;TradeFundrr;LifeUpTrading;FundedFuturesFamily;TakeProfitTrader;BrandonTestOrg;FundingTicks;EmergeProfit;LegendsTradingGroup;AlphaFutures;FundingFutures;GoatFundedFutures;BlueGuardianFutures;TopOneFutures;Apteros;E8Markets;FundedNext;EliteTraderFunding;FuturesElite;QAProdTestOrg;CHYProdTestOrg;HolaPrime;TX3Funding;PhidiasPropFirm;AquaFutures",
+              "rebate": 0.0
+            }
+          ],
+          "annualReviews": [
+            {
+              "id": 266658,
+              "userId": 3701228,
+              "firstEmail": "demo.user@example.com",
+              "secondEmail": "demo.user@example.com",
+              "firstEmailSent": "2025-09-15T21:02:04Z",
+              "secondEmailSent": "2025-10-01T21:03Z",
+              "riskDisclosureNeeded": false,
+              "archived": false,
+              "status": "Open"
+            }
+          ],
+          "userReadStatuses": [
+            {
+              "id": 3701228,
+              "newsStoryId": 270486
+            }
+          ],
+          "userPromoCodes": [],
+          "contractGroups": [
+            {
+              "id": 15,
+              "name": "Micro Indices"
+            },
+            {
+              "id": 12,
+              "name": "Cryptocurrencies"
+            },
+            {
+              "id": 9,
+              "name": "Energies"
+            },
+            {
+              "id": 1,
+              "name": "General"
+            },
+            {
+              "id": 16,
+              "name": "Crypto Indices"
+            },
+            {
+              "id": 13,
+              "name": "Equities"
+            },
+            {
+              "id": 5,
+              "name": "Grains"
+            },
+            {
+              "id": 2,
+              "name": "Indices"
+            },
+            {
+              "id": 17,
+              "name": "Kalshi"
+            },
+            {
+              "id": 6,
+              "name": "Currencies"
+            },
+            {
+              "id": 3,
+              "name": "Financials"
+            },
+            {
+              "id": 10,
+              "name": "E-Mini Indices"
+            },
+            {
+              "id": 7,
+              "name": "Meats"
+            },
+            {
+              "id": 4,
+              "name": "Metals"
+            },
+            {
+              "id": 14,
+              "name": "Event Contracts"
+            },
+            {
+              "id": 11,
+              "name": "Market Internals"
+            },
+            {
+              "id": 8,
+              "name": "Softs"
+            }
+          ],
+          "orderStrategyTypes": []
+        }
+      }
+    }
+  ],
+  "other": []
+}
