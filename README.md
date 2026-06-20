@@ -482,9 +482,16 @@ Follower dropdowns then list those labels. Picking one copies its fields
 into the pair. The book is saved to `config/accounts.json` (gitignored;
 see `config/accounts.json.example`) and is a **GUI convenience only** —
 the engine never reads it, and pairs keep their own copy of the fields,
-so the book can be changed or deleted without affecting replication. An
-account still referenced by a pair can't be deleted; the GUI says which
-pair is using it.
+so the book can be changed or deleted without affecting replication.
+
+Add / Edit / Remove sit beside the account list. An account still
+referenced by a pair can't be **deleted** (the GUI names the pair using
+it), and **editing** such an account is restricted to its label only —
+broker / env / id are frozen, because each pair holds its own copy of
+those fields and changing them here would silently desync the pair.
+Accounts not used by any pair can be edited freely. To change the
+broker / env / id of an in-use account, edit or remove those pairs
+first.
 
 ## Verbose troubleshooting mode (default ON)
 

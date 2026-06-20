@@ -370,6 +370,84 @@ class TestAccountBook(_Base):
         self.assertEqual(rows["flw"], ["p"])
         self.assertEqual(rows["unused"], [])
 
+    # ── update_account ──────────────────────────────────────────── #
+
+    def test_update_unused_account_can_change_everything(self):
+        self.ctl.add_account(self._acct(label="old", broker="ibkr",
+                                        env="demo", account_id="DU1"))
+        self.ctl.update_account("old", Account(
+            label="new", broker="tradovate", env="live",
+            account_id="50000001"))
+        self.assertEqual(self.ctl.account_labels(), ["new"])
+        a = self.ctl.account_by_label("new")
+        self.assertEqual(a.identity, "tradovate_live_50000001")
+
+    def test_update_unknown_account_raises(self):
+        with self.assertRaises(ReplicationConfigError):
+            self.ctl.update_account("ghost", self._acct(label="x"))
+
+    def test_update_in_use_account_can_rename(self):
+        self.ctl.add_account(self._acct(label="src", broker="tradovate",
+                                        account_id="50000001"))
+        self.ctl.add_account(self._acct(label="flw", broker="ibkr",
+                                        account_id="DU0000002"))
+        self.ctl.add_pair(self.ctl.draft_from_labels(
+            name="p", source_label="src", follower_label="flw", ratio="1.0"))
+        # rename only — same broker/env/id — is allowed while in use
+        self.ctl.update_account("src", Account(
+            label="renamed", broker="tradovate", env="demo",
+            account_id="50000001"))
+        self.assertIn("renamed", self.ctl.account_labels())
+        # the pair still points at the same identity
+        self.assertEqual(self.ctl.pairs[0].source.identity,
+                         "tradovate_demo_50000001")
+
+    def test_update_in_use_account_identity_change_blocked(self):
+        self.ctl.add_account(self._acct(label="src", broker="tradovate",
+                                        account_id="50000001"))
+        self.ctl.add_account(self._acct(label="flw", broker="ibkr",
+                                        account_id="DU0000002"))
+        self.ctl.add_pair(self.ctl.draft_from_labels(
+            name="live mirror", source_label="src", follower_label="flw",
+            ratio="1.0"))
+        with self.assertRaises(ReplicationConfigError) as ctx:
+            self.ctl.update_account("src", Account(
+                label="src", broker="tradovate", env="demo",
+                account_id="99999999"))
+        self.assertIn("live mirror", str(ctx.exception))
+        # account unchanged
+        self.assertEqual(self.ctl.account_by_label("src").account_id,
+                         "50000001")
+
+    def test_update_rejects_label_clashing_with_another(self):
+        self.ctl.add_account(self._acct(label="a", account_id="1"))
+        self.ctl.add_account(self._acct(label="b", account_id="2"))
+        with self.assertRaises(ReplicationConfigError):
+            self.ctl.update_account("b", self._acct(label="a", account_id="2"))
+        self.assertEqual(self.ctl.account_by_label("b").label, "b")
+
+    def test_update_can_keep_own_label(self):
+        self.ctl.add_account(self._acct(label="keep", account_id="1"))
+        self.ctl.update_account("keep", self._acct(label="keep",
+                                                   account_id="2"))
+        self.assertEqual(self.ctl.account_by_label("keep").account_id, "2")
+
+    def test_account_draft_for_reports_locked(self):
+        self.ctl.add_account(self._acct(label="src", broker="tradovate",
+                                        account_id="50000001"))
+        self.ctl.add_account(self._acct(label="free", broker="ibkr",
+                                        account_id="DU9"))
+        self.ctl.add_account(self._acct(label="flw", broker="ibkr",
+                                        account_id="DU0000002"))
+        self.ctl.add_pair(self.ctl.draft_from_labels(
+            name="p", source_label="src", follower_label="flw", ratio="1.0"))
+        self.assertTrue(self.ctl.account_draft_for("src")["locked"])
+        self.assertFalse(self.ctl.account_draft_for("free")["locked"])
+
+    def test_account_draft_for_unknown_raises(self):
+        with self.assertRaises(ReplicationConfigError):
+            self.ctl.account_draft_for("nope")
+
 
 if __name__ == "__main__":
     unittest.main()

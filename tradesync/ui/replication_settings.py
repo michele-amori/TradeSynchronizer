@@ -273,6 +273,65 @@ class ReplicationSettingsController:
                 f"account.")
         del self._book.accounts[idx]
 
+    def update_account(self, current_label: str,
+                       new_account: Account) -> Account:
+        """Replace the account currently labelled `current_label` with
+        `new_account`, validating WITHOUT mutating state on failure.
+
+        Rule (mirrors the deletion guard): if the account is referenced
+        by any pair, only its LABEL may change — broker/env/account_id
+        are frozen, because each pair holds its own COPY of those fields
+        and editing them here would silently desync the pair from the
+        account it was built from. The label is cosmetic (it's not copied
+        into pairs), so renaming an in-use account is always allowed.
+
+        The new label must stay unique (case-insensitively), excluding
+        the account being edited so keeping its own label is fine."""
+        idx = next((i for i, a in enumerate(self._book.accounts)
+                    if a.label == current_label), None)
+        if idx is None:
+            raise ReplicationConfigError(
+                f"no account labelled {current_label!r}")
+        new_account.validate()
+        # Unique label, excluding the row being edited.
+        new_key = new_account.label.strip().lower()
+        if any(i != idx and a.label.strip().lower() == new_key
+               for i, a in enumerate(self._book.accounts)):
+            raise ReplicationConfigError(
+                f"an account labelled {new_account.label!r} already exists — "
+                f"labels must be unique")
+        used_by = self.pairs_using_account(current_label)
+        if used_by:
+            old = self._book.accounts[idx]
+            changed_identity = (
+                new_account.broker != old.broker
+                or new_account.env != old.env
+                or new_account.account_id != old.account_id)
+            if changed_identity:
+                joined = ", ".join(repr(n) for n in used_by)
+                raise ReplicationConfigError(
+                    f"account {current_label!r} is used by pair(s) {joined}, "
+                    f"so only its label can be changed — not its broker, "
+                    f"env or account id. Edit or remove those pair(s) first "
+                    f"to change the account itself.")
+        self._book.accounts[idx] = new_account
+        return new_account
+
+    def account_draft_for(self, label: str) -> dict:
+        """The account's current fields plus whether it's locked (in use),
+        for loading into the edit form. `locked` True ⇒ the form should
+        only allow the label to change."""
+        acct = self.account_by_label(label)
+        if acct is None:
+            raise ReplicationConfigError(f"no account labelled {label!r}")
+        return {
+            "label": acct.label,
+            "broker": acct.broker,
+            "env": acct.env,
+            "account_id": acct.account_id,
+            "locked": bool(self.pairs_using_account(label)),
+        }
+
     def draft_from_labels(self, *, name: str, source_label: str,
                           follower_label: str, ratio: str,
                           enabled: bool = True) -> PairDraft:
@@ -377,11 +436,16 @@ def build_panel(parent, controller: ReplicationSettingsController):
     acct_btns = ttk.Frame(acct_list_frame)
     acct_btns.pack(side="left", fill="y", padx=(8, 0))
 
-    # Account add-form fields.
+    # Account add/edit-form fields.
     al_label = tk.StringVar()
     al_broker = tk.StringVar(value="tradovate")
     al_env = tk.StringVar(value="demo")
     al_acct = tk.StringVar()
+
+    # Which account (by its current label) the form is editing. None =
+    # add mode; a string = updating that account. A one-element list so
+    # inner closures can rebind it.
+    acct_edit_label = [None]
 
     def refresh_accounts():
         acct_listbox.delete(0, tk.END)
@@ -395,18 +459,62 @@ def build_panel(parent, controller: ReplicationSettingsController):
         # Keep the pair-form dropdowns in sync with the book.
         _sync_account_dropdowns()
 
-    def on_add_account():
+    def _set_identity_fields_state(state):
+        """Enable/disable the broker/env/id widgets. Used to lock them
+        when editing an in-use account (only its label may change)."""
+        al_broker_combo.configure(state=state)
+        al_env_combo.configure(state=state)
+        al_acct_entry.configure(state=state)
+
+    def _exit_acct_edit_mode():
+        acct_edit_label[0] = None
+        acct_box.configure(text="Accounts")
+        acct_submit_btn.configure(text="Add account")
+        acct_cancel_btn.pack_forget()
+        acct_lock_note.pack_forget()
+        al_label.set(""); al_acct.set("")
+        al_broker.set("tradovate"); al_env.set("demo")
+        # readonly = the normal state for the comboboxes; entry back to normal.
+        al_broker_combo.configure(state="readonly")
+        al_env_combo.configure(state="readonly")
+        al_acct_entry.configure(state="normal")
+
+    def on_acct_submit():
         try:
-            controller.add_account(Account(
-                label=al_label.get(), broker=al_broker.get(),
-                env=al_env.get(), account_id=al_acct.get()))
+            new = Account(label=al_label.get(), broker=al_broker.get(),
+                          env=al_env.get(), account_id=al_acct.get())
+            if acct_edit_label[0] is None:
+                controller.add_account(new)
+            else:
+                controller.update_account(acct_edit_label[0], new)
             controller.save_accounts()
         except ReplicationConfigError as e:
             messagebox.showerror("Invalid account", str(e))
             return
-        al_label.set(""); al_acct.set("")
-        al_broker.set("tradovate"); al_env.set("demo")
+        _exit_acct_edit_mode()
         refresh_accounts()
+
+    def on_edit_account():
+        sel = acct_listbox.curselection()
+        if not sel:
+            return
+        label = controller.account_labels()[sel[0]]
+        info = controller.account_draft_for(label)
+        al_label.set(info["label"])
+        al_broker.set(info["broker"])
+        al_env.set(info["env"])
+        al_acct.set(info["account_id"])
+        acct_edit_label[0] = label
+        acct_box.configure(text=f"Accounts — editing {info['label']!r}")
+        acct_submit_btn.configure(text="Update account")
+        acct_cancel_btn.pack(in_=acct_btns, fill="x", pady=(4, 0))
+        if info["locked"]:
+            # In use by a pair: identity is frozen, only the label is free.
+            _set_identity_fields_state("disabled")
+            acct_lock_note.pack(anchor="w", pady=(4, 0))
+        else:
+            _set_identity_fields_state("readonly")
+            acct_lock_note.pack_forget()
 
     def on_remove_account():
         sel = acct_listbox.curselection()
@@ -420,28 +528,46 @@ def build_panel(parent, controller: ReplicationSettingsController):
             # In-use accounts land here: tell the user why, naming pairs.
             messagebox.showwarning("Account in use", str(e))
             return
+        # If we were editing the removed account, drop back to add mode.
+        if acct_edit_label[0] == label:
+            _exit_acct_edit_mode()
         refresh_accounts()
 
-    # Account add-form: one compact row of fields + an Add button.
+    # Account add/edit-form: one compact row of fields + a submit button.
     acct_form = ttk.Frame(acct_box)
     acct_form.pack(fill="x", pady=(8, 0))
     ttk.Label(acct_form, text="Label").pack(side="left")
     ttk.Entry(acct_form, textvariable=al_label, width=16
               ).pack(side="left", padx=(2, 6))
-    ttk.Combobox(acct_form, textvariable=al_broker, width=10,
-                 values=["tradovate", "ibkr"], state="readonly"
-                 ).pack(side="left", padx=2)
-    ttk.Combobox(acct_form, textvariable=al_env, width=6,
-                 values=["demo", "live"], state="readonly"
-                 ).pack(side="left", padx=2)
+    al_broker_combo = ttk.Combobox(acct_form, textvariable=al_broker, width=10,
+                                   values=["tradovate", "ibkr"],
+                                   state="readonly")
+    al_broker_combo.pack(side="left", padx=2)
+    al_env_combo = ttk.Combobox(acct_form, textvariable=al_env, width=6,
+                                values=["demo", "live"], state="readonly")
+    al_env_combo.pack(side="left", padx=2)
     ttk.Label(acct_form, text="Id").pack(side="left", padx=(6, 2))
-    ttk.Entry(acct_form, textvariable=al_acct, width=14
-              ).pack(side="left", padx=2)
+    al_acct_entry = ttk.Entry(acct_form, textvariable=al_acct, width=14)
+    al_acct_entry.pack(side="left", padx=2)
 
-    ttk.Button(acct_btns, text="Add account",
-               command=on_add_account).pack(fill="x")
+    # Shown only while editing an in-use account, to explain the lock.
+    acct_lock_note = ttk.Label(
+        acct_box,
+        text=("This account is used by a pair, so only its label can be "
+              "changed. To change broker/env/id, edit or remove those "
+              "pairs first."),
+        wraplength=520, foreground="#666")
+
+    acct_submit_btn = ttk.Button(acct_btns, text="Add account",
+                                 command=on_acct_submit)
+    acct_submit_btn.pack(fill="x")
+    ttk.Button(acct_btns, text="Edit account",
+               command=on_edit_account).pack(fill="x", pady=(4, 0))
     ttk.Button(acct_btns, text="Remove account",
                command=on_remove_account).pack(fill="x", pady=(4, 0))
+    acct_cancel_btn = ttk.Button(acct_btns, text="Cancel edit",
+                                 command=lambda: _exit_acct_edit_mode())
+    # acct_cancel_btn is packed only while editing.
 
     # ══ Section 2: Replication pairs ═════════════════════════════════ #
     ttk.Label(frame, text="Replication pairs (source → follower)",
