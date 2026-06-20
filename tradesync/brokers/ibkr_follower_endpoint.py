@@ -290,6 +290,23 @@ def _clone_order(src: Order) -> Order:
         o.lmtPrice = src.lmtPrice
     if getattr(src, "auxPrice", None) is not None:
         o.auxPrice = src.auxPrice
+    # Carry the OCA grouping through a modify. A bracket child is placed
+    # as a member of an OCA group (ocaGroup "oca_<entry>", ocaType 1, set
+    # by IbkrApiClient.place_bracket on the very Order object we remember
+    # here). IBKR modifies by re-placing the full order under the same
+    # id; if we drop ocaGroup, IBKR sees the leg leaving its group and
+    # rejects the re-place with OCA error code 10327 ("OCA group type
+    # revision is not allowed"). The price change still applied, but the
+    # error fired on every bracket-leg modify and would mask a genuine
+    # OCA problem. Preserving the group makes it an in-group modify,
+    # which IBKR accepts cleanly; parentId is carried for the same
+    # reason. Non-bracket orders don't set these, so this is a no-op
+    # for them.
+    if getattr(src, "ocaGroup", ""):
+        o.ocaGroup = src.ocaGroup
+        o.ocaType = getattr(src, "ocaType", 0)
+    if getattr(src, "parentId", 0):
+        o.parentId = src.parentId
     o.eTradeOnly = False
     o.firmQuoteOnly = False
     return o

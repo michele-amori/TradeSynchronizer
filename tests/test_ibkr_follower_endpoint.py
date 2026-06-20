@@ -81,8 +81,16 @@ class FakeIbkrApiClient:
         self.brackets.append((contract, parent, children))
         entry = self._next
         self._next += 1
+        # Mirror IbkrApiClient.place_bracket: stamp the OCA group +
+        # parentId onto each child Order in place (these are the very
+        # objects the endpoint remembers for later modify, so the OCA
+        # fields must be present for the modify-path test to be faithful).
+        oca_group = f"oca_{entry}"
         cids = []
-        for _ in children:
+        for child in children:
+            child.parentId = entry
+            child.ocaGroup = oca_group
+            child.ocaType = 1
             cids.append(self._next)
             self._next += 1
         return entry, cids
@@ -304,6 +312,46 @@ class TestCancelModifyStatus(unittest.TestCase):
         ep, client = _endpoint()
         client.statuses[555] = "Filled"
         self.assertEqual(ep.order_status("555"), "Filled")
+
+    def test_modify_bracket_leg_preserves_oca_group(self):
+        # Regression for the live `code=10327 OCA group type revision is
+        # not allowed` error: modifying a bracket exit leg must keep the
+        # leg in its OCA group, not re-place it with an empty group.
+        ep, client = _endpoint()
+        entry = OrderSpec(side=Side.BUY, quantity=1,
+                          order_type=OrderType.MARKET, role=BracketRole.ENTRY)
+        tp = OrderSpec(side=Side.SELL, quantity=1, order_type=OrderType.LIMIT,
+                       limit_price=120.0, role=BracketRole.TAKE_PROFIT)
+        sl = OrderSpec(side=Side.SELL, quantity=1, order_type=OrderType.STOP,
+                       stop_price=90.0, role=BracketRole.STOP_LOSS)
+        ref = ep.place_bracket(BracketSpec(entry=entry, children=[tp, sl]),
+                               symbol="MNQM6")
+        # Move the stop-loss leg (the second child).
+        sl_id = ref.child_order_ids[1]
+        ep.modify_order(sl_id, ModifySpec(new_stop_price=88.0,
+                                          order_type=OrderType.STOP))
+        _oid, _contract, order = client.modified[-1]
+        # The re-placed leg carries its OCA group + type and parentId, so
+        # IBKR sees an in-group modify rather than an OCA-type revision.
+        self.assertTrue(order.ocaGroup)
+        self.assertEqual(order.ocaType, 1)
+        self.assertTrue(order.parentId)
+        # And the price change still went through.
+        self.assertEqual(order.auxPrice, 88.0)
+
+    def test_modify_single_order_has_no_oca_group(self):
+        # A plain (non-bracket) order has no OCA group, and a modify must
+        # NOT invent one — only bracket legs carry it.
+        ep, client = _endpoint()
+        ref = ep.place_order(
+            OrderSpec(side=Side.BUY, quantity=1, order_type=OrderType.LIMIT,
+                      limit_price=100.0),
+            symbol="MNQM6")
+        ep.modify_order(ref.follower_order_id,
+                        ModifySpec(new_limit_price=101.0,
+                                   order_type=OrderType.LIMIT))
+        _oid, _contract, order = client.modified[-1]
+        self.assertFalse(getattr(order, "ocaGroup", ""))
 
 
 class TestAccountReachableGuardrail(unittest.TestCase):
