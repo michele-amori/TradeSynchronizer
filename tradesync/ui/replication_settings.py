@@ -27,6 +27,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
+from ..account_book import (
+    Account,
+    AccountBook,
+    default_account_book_path,
+)
 from ..replication_config import (
     EndpointRef,
     ReplicationConfig,
@@ -80,13 +85,19 @@ class ReplicationSettingsController:
     """Headless logic backing the replication settings panel."""
 
     def __init__(self, config_path: Optional[Path] = None,
-                 project_root: Optional[Path] = None):
-        if config_path is None:
+                 project_root: Optional[Path] = None,
+                 accounts_path: Optional[Path] = None):
+        if config_path is None or accounts_path is None:
             from ..config import PROJECT_ROOT
             root = project_root or PROJECT_ROOT
-            config_path = default_replication_config_path(root)
+            if config_path is None:
+                config_path = default_replication_config_path(root)
+            if accounts_path is None:
+                accounts_path = default_account_book_path(root)
         self._path = config_path
+        self._accounts_path = accounts_path
         self._config = ReplicationConfig()
+        self._book = AccountBook()
 
     @property
     def config_path(self) -> Path:
@@ -104,18 +115,30 @@ class ReplicationSettingsController:
 
     def load(self) -> None:
         """Load from disk. A missing/invalid file yields an empty config
-        (and logs); the panel then starts blank rather than erroring."""
+        (and logs); the panel then starts blank rather than erroring.
+        The account book is loaded the same forgiving way."""
         try:
             self._config = ReplicationConfig.load(self._path)
         except ReplicationConfigError as e:
             logger.warning("replication.json invalid (%s) — starting empty", e)
             self._config = ReplicationConfig()
+        try:
+            self._book = AccountBook.load(self._accounts_path)
+        except ReplicationConfigError as e:
+            logger.warning("accounts.json invalid (%s) — starting empty", e)
+            self._book = AccountBook()
 
     def save(self) -> None:
         """Validate + persist. Raises ReplicationConfigError if the
         current set of pairs is invalid, so the panel can show the
         message instead of writing a broken file."""
         self._config.save(self._path)
+
+    def save_accounts(self) -> None:
+        """Validate + persist the account book. Separate from save() so a
+        pair-config problem can't block saving the address book and vice
+        versa."""
+        self._book.save(self._accounts_path)
 
     # ── mutate ───────────────────────────────────────────────────── #
 
@@ -190,6 +213,103 @@ class ReplicationSettingsController:
             g.client_id = client_id
         g.validate()
 
+    # ── account book ─────────────────────────────────────────────── #
+
+    @property
+    def accounts(self) -> List[Account]:
+        return list(self._book.accounts)
+
+    def account_labels(self) -> List[str]:
+        """Labels for the pair-form dropdowns, in insertion order."""
+        return [a.label for a in self._book.accounts]
+
+    def account_by_label(self, label: str) -> Optional[Account]:
+        for a in self._book.accounts:
+            if a.label == label:
+                return a
+        return None
+
+    def add_account(self, account: Account) -> Account:
+        """Validate an account and append it. Raises
+        ReplicationConfigError on invalid input or a duplicate label
+        WITHOUT mutating state."""
+        account.validate()
+        if any(a.label.strip().lower() == account.label.strip().lower()
+               for a in self._book.accounts):
+            raise ReplicationConfigError(
+                f"an account labelled {account.label!r} already exists — "
+                f"labels must be unique")
+        self._book.accounts.append(account)
+        return account
+
+    def pairs_using_account(self, label: str) -> List[str]:
+        """Names of pairs whose source or follower matches this account's
+        identity. Used to block deletion of an in-use account."""
+        acct = self.account_by_label(label)
+        if acct is None:
+            return []
+        ident = acct.identity
+        used = []
+        for p in self._config.pairs:
+            if p.source.identity == ident or p.follower.identity == ident:
+                used.append(p.name)
+        return used
+
+    def remove_account(self, label: str) -> None:
+        """Delete an account by label. Refuses (ReplicationConfigError)
+        if any pair still references it, naming the offending pair(s), so
+        the user can't orphan a pair's dropdown selection."""
+        idx = next((i for i, a in enumerate(self._book.accounts)
+                    if a.label == label), None)
+        if idx is None:
+            raise ReplicationConfigError(
+                f"no account labelled {label!r}")
+        used_by = self.pairs_using_account(label)
+        if used_by:
+            joined = ", ".join(repr(n) for n in used_by)
+            raise ReplicationConfigError(
+                f"account {label!r} is still used by pair(s) {joined}. "
+                f"Remove or edit those pair(s) first, then delete the "
+                f"account.")
+        del self._book.accounts[idx]
+
+    def draft_from_labels(self, *, name: str, source_label: str,
+                          follower_label: str, ratio: str,
+                          enabled: bool = True) -> PairDraft:
+        """Build a PairDraft from two account labels (the dropdown
+        selections), copying each account's broker/env/account_id in.
+        Raises ReplicationConfigError if a label isn't in the book."""
+        src = self.account_by_label(source_label)
+        flw = self.account_by_label(follower_label)
+        if src is None:
+            raise ReplicationConfigError(
+                f"source account {source_label!r} not found — create it "
+                f"in Accounts first")
+        if flw is None:
+            raise ReplicationConfigError(
+                f"follower account {follower_label!r} not found — create it "
+                f"in Accounts first")
+        return PairDraft(
+            name=name,
+            source_broker=src.broker, source_env=src.env,
+            source_account=src.account_id,
+            follower_broker=flw.broker, follower_env=flw.env,
+            follower_account=flw.account_id,
+            enabled=enabled, ratio=ratio)
+
+    def account_rows(self) -> List[dict]:
+        """A render-friendly view of the saved accounts for a listbox."""
+        rows = []
+        for a in self._book.accounts:
+            rows.append({
+                "label": a.label,
+                "broker": a.broker,
+                "env": a.env,
+                "account_id": a.account_id,
+                "in_use_by": self.pairs_using_account(a.label),
+            })
+        return rows
+
     def summary_rows(self) -> List[dict]:
         """A render-friendly view of the pairs for a table/listbox."""
         rows = []
@@ -226,20 +346,109 @@ def build_panel(parent, controller: ReplicationSettingsController):
     as a function (not a module-level class) so importing this module
     headless — for the controller and its tests — never imports tkinter.
 
-    The panel is intentionally minimal: a list of existing pairs with
-    enable/remove, a small form to add a pair, and gateway host/port
-    fields. It reads/writes through the controller and calls
-    controller.save() on demand."""
+    Two stacked sections:
+      * Accounts — a reusable address book. Add accounts here ONCE
+        (label + broker + env + id); they then populate the pair-form
+        dropdowns. An account in use by a pair can't be deleted.
+      * Replication pairs — pick a saved source + follower account from
+        dropdowns (no re-typing), set a ratio, add/edit/enable/remove.
+
+    It reads/writes through the controller, saving on every mutation."""
     import tkinter as tk
     from tkinter import ttk, messagebox
 
     frame = ttk.Frame(parent, padding=12)
 
+    # ══ Section 1: Accounts (the reusable address book) ══════════════ #
+    acct_box = ttk.LabelFrame(frame, text="Accounts", padding=8)
+    acct_box.pack(fill="x")
+    ttk.Label(
+        acct_box,
+        text=("Register each broker account once, then pick it from the "
+              "dropdowns below. Saved to config/accounts.json (GUI-only; "
+              "the engine never reads it)."),
+        wraplength=520, foreground="#666",
+    ).pack(anchor="w", pady=(0, 6))
+
+    acct_list_frame = ttk.Frame(acct_box)
+    acct_list_frame.pack(fill="both", expand=True)
+    acct_listbox = tk.Listbox(acct_list_frame, height=4)
+    acct_listbox.pack(side="left", fill="both", expand=True)
+    acct_btns = ttk.Frame(acct_list_frame)
+    acct_btns.pack(side="left", fill="y", padx=(8, 0))
+
+    # Account add-form fields.
+    al_label = tk.StringVar()
+    al_broker = tk.StringVar(value="tradovate")
+    al_env = tk.StringVar(value="demo")
+    al_acct = tk.StringVar()
+
+    def refresh_accounts():
+        acct_listbox.delete(0, tk.END)
+        for row in controller.account_rows():
+            used = row["in_use_by"]
+            tag = f"  (used by {len(used)})" if used else ""
+            acct_listbox.insert(
+                tk.END,
+                f"{row['label']}: {row['broker']}/{row['env']}/"
+                f"{row['account_id']}{tag}")
+        # Keep the pair-form dropdowns in sync with the book.
+        _sync_account_dropdowns()
+
+    def on_add_account():
+        try:
+            controller.add_account(Account(
+                label=al_label.get(), broker=al_broker.get(),
+                env=al_env.get(), account_id=al_acct.get()))
+            controller.save_accounts()
+        except ReplicationConfigError as e:
+            messagebox.showerror("Invalid account", str(e))
+            return
+        al_label.set(""); al_acct.set("")
+        al_broker.set("tradovate"); al_env.set("demo")
+        refresh_accounts()
+
+    def on_remove_account():
+        sel = acct_listbox.curselection()
+        if not sel:
+            return
+        label = controller.account_labels()[sel[0]]
+        try:
+            controller.remove_account(label)
+            controller.save_accounts()
+        except ReplicationConfigError as e:
+            # In-use accounts land here: tell the user why, naming pairs.
+            messagebox.showwarning("Account in use", str(e))
+            return
+        refresh_accounts()
+
+    # Account add-form: one compact row of fields + an Add button.
+    acct_form = ttk.Frame(acct_box)
+    acct_form.pack(fill="x", pady=(8, 0))
+    ttk.Label(acct_form, text="Label").pack(side="left")
+    ttk.Entry(acct_form, textvariable=al_label, width=16
+              ).pack(side="left", padx=(2, 6))
+    ttk.Combobox(acct_form, textvariable=al_broker, width=10,
+                 values=["tradovate", "ibkr"], state="readonly"
+                 ).pack(side="left", padx=2)
+    ttk.Combobox(acct_form, textvariable=al_env, width=6,
+                 values=["demo", "live"], state="readonly"
+                 ).pack(side="left", padx=2)
+    ttk.Label(acct_form, text="Id").pack(side="left", padx=(6, 2))
+    ttk.Entry(acct_form, textvariable=al_acct, width=14
+              ).pack(side="left", padx=2)
+
+    ttk.Button(acct_btns, text="Add account",
+               command=on_add_account).pack(fill="x")
+    ttk.Button(acct_btns, text="Remove account",
+               command=on_remove_account).pack(fill="x", pady=(4, 0))
+
+    # ══ Section 2: Replication pairs ═════════════════════════════════ #
     ttk.Label(frame, text="Replication pairs (source → follower)",
-              font=("", 13, "bold")).pack(anchor="w")
+              font=("", 13, "bold")).pack(anchor="w", pady=(14, 0))
     ttk.Label(
         frame,
-        text=("Declare which account mirrors onto which. Tradovate→IBKR "
+        text=("Pick a saved source and follower account. Tradovate→IBKR "
               "needs IB Gateway running. Saved to config/replication.json; "
               "the engine reads it when WS pipelines are enabled."),
         wraplength=520, foreground="#666",
@@ -266,15 +475,17 @@ def build_panel(parent, controller: ReplicationSettingsController):
                 f"{row['follower']}{rt}{gw}")
 
     def _persist_and_refresh():
-        """Write the current pairs to disk and redraw the list. Every
-        mutation (add, update, toggle, remove) goes through here, so the
-        config file always reflects the list — there's no separate Save
-        step. A validation error leaves the list as-is and reports it."""
+        """Write the current pairs to disk and redraw both lists. Every
+        pair mutation goes through here, so the config file always
+        reflects the list — there's no separate Save step. A validation
+        error leaves the list as-is and reports it. Accounts are redrawn
+        too so their in-use markers stay correct."""
         try:
             controller.save()
         except ReplicationConfigError as e:
             messagebox.showerror("Invalid configuration", str(e))
         refresh()
+        refresh_accounts()
 
     btns = ttk.Frame(list_frame)
     btns.pack(side="left", fill="y", padx=(8, 0))
@@ -317,52 +528,48 @@ def build_panel(parent, controller: ReplicationSettingsController):
     ttk.Button(btns, text="Open IB Gateway",
                command=on_open_gateway).pack(fill="x", pady=(4, 0))
 
-    # Add-pair form.
+    # Add-pair form: name + source/follower DROPDOWNS (from the book) +
+    # ratio. No broker/env/id typing here — that lives in Accounts.
     form = ttk.LabelFrame(frame, text="Add a pair", padding=8)
     form.pack(fill="x", pady=(10, 0))
 
     name_var = tk.StringVar()
-    s_broker = tk.StringVar(value="tradovate")
-    s_env = tk.StringVar(value="demo")
-    s_acct = tk.StringVar()
-    f_broker = tk.StringVar(value="ibkr")
-    f_env = tk.StringVar(value="demo")
-    f_acct = tk.StringVar()
+    source_label_var = tk.StringVar()
+    follower_label_var = tk.StringVar()
     ratio_var = tk.StringVar(value="1.0")
 
     def _row(label, build_widgets):
-        """Create one labelled row. build_widgets(row_frame) creates the
-        widgets WITH the row frame as their parent and packs them — this
-        is what keeps each row self-contained (a prior version created
-        the widgets with `form` as parent, so they all escaped onto a
-        single overflowing line and pushed the buttons off-screen)."""
         r = ttk.Frame(form)
         r.pack(fill="x", pady=2)
         ttk.Label(r, text=label, width=10).pack(side="left")
         build_widgets(r)
 
+    # The two account dropdowns, kept in module scope so refresh_accounts
+    # can repopulate their value lists when the book changes.
+    source_combo = [None]
+    follower_combo = [None]
+
+    def _sync_account_dropdowns():
+        labels = controller.account_labels()
+        for holder in (source_combo, follower_combo):
+            combo = holder[0]
+            if combo is not None:
+                combo.configure(values=labels)
+
     def _build_name(r):
         ttk.Entry(r, textvariable=name_var, width=24).pack(side="left", padx=2)
 
     def _build_source(r):
-        ttk.Combobox(r, textvariable=s_broker, width=10,
-                     values=["tradovate", "ibkr"], state="readonly"
-                     ).pack(side="left", padx=2)
-        ttk.Combobox(r, textvariable=s_env, width=6,
-                     values=["demo", "live"], state="readonly"
-                     ).pack(side="left", padx=2)
-        ttk.Label(r, text="Account").pack(side="left", padx=(8, 2))
-        ttk.Entry(r, textvariable=s_acct, width=14).pack(side="left", padx=2)
+        c = ttk.Combobox(r, textvariable=source_label_var, width=28,
+                         values=controller.account_labels(), state="readonly")
+        c.pack(side="left", padx=2)
+        source_combo[0] = c
 
     def _build_follower(r):
-        ttk.Combobox(r, textvariable=f_broker, width=10,
-                     values=["ibkr", "tradovate"], state="readonly"
-                     ).pack(side="left", padx=2)
-        ttk.Combobox(r, textvariable=f_env, width=6,
-                     values=["demo", "live"], state="readonly"
-                     ).pack(side="left", padx=2)
-        ttk.Label(r, text="Account").pack(side="left", padx=(8, 2))
-        ttk.Entry(r, textvariable=f_acct, width=14).pack(side="left", padx=2)
+        c = ttk.Combobox(r, textvariable=follower_label_var, width=28,
+                         values=controller.account_labels(), state="readonly")
+        c.pack(side="left", padx=2)
+        follower_combo[0] = c
 
     def _build_ratio(r):
         ttk.Entry(r, textvariable=ratio_var, width=8).pack(side="left", padx=2)
@@ -376,16 +583,14 @@ def build_panel(parent, controller: ReplicationSettingsController):
     _row("Ratio", _build_ratio)
     ttk.Label(
         form,
-        text=("Account = the broker's account id: Tradovate is numeric "
-              "(e.g. 19000001), IBKR looks like U0000001 (or DU… for paper)."),
+        text=("Source and Follower are accounts from the Accounts list "
+              "above. Add the account there first if it isn't listed."),
         wraplength=520, foreground="#666",
     ).pack(anchor="w", pady=(4, 0))
 
     def _clear_form():
-        name_var.set(""); s_acct.set(""); f_acct.set("")
+        name_var.set(""); source_label_var.set(""); follower_label_var.set("")
         ratio_var.set("1.0")
-        s_broker.set("tradovate"); s_env.set("demo")
-        f_broker.set("ibkr"); f_env.set("demo")
 
     def _exit_edit_mode():
         """Leave edit mode: clear the form and restore the add-pair UI."""
@@ -395,29 +600,48 @@ def build_panel(parent, controller: ReplicationSettingsController):
         cancel_btn.pack_forget()
         _clear_form()
 
+    def _label_for_endpoint(identity: str) -> str:
+        """Find the account label whose identity matches a pair endpoint,
+        so Edit can preselect the right dropdown entry. Empty string if
+        the pair refers to an account not in the book (legacy / hand-
+        edited config)."""
+        for a in controller.accounts:
+            if a.identity == identity:
+                return a.label
+        return ""
+
     def on_edit():
         i = _selected_index()
         if i is None:
             return
         draft = controller.draft_for(i)
         name_var.set(draft.name)
-        s_broker.set(draft.source_broker); s_env.set(draft.source_env)
-        s_acct.set(draft.source_account)
-        f_broker.set(draft.follower_broker); f_env.set(draft.follower_env)
-        f_acct.set(draft.follower_account)
+        src_id = f"{draft.source_broker}_{draft.source_env}_{draft.source_account}"
+        flw_id = (f"{draft.follower_broker}_{draft.follower_env}_"
+                  f"{draft.follower_account}")
+        src_label = _label_for_endpoint(src_id)
+        flw_label = _label_for_endpoint(flw_id)
+        source_label_var.set(src_label)
+        follower_label_var.set(flw_label)
         ratio_var.set(draft.ratio)
         edit_index[0] = i
         form.configure(text=f"Edit pair: {draft.name}")
         submit_btn.configure(text="Update pair")
         cancel_btn.pack(in_=btn_row, side="right", padx=(6, 0))
+        if not src_label or not flw_label:
+            messagebox.showinfo(
+                "Account not in list",
+                "This pair refers to an account that isn't in the Accounts "
+                "list (it may have been hand-edited). Add the matching "
+                "account above, or pick replacements from the dropdowns.")
 
     def on_submit():
-        draft = PairDraft(
-            name=name_var.get(), source_broker=s_broker.get(),
-            source_env=s_env.get(), source_account=s_acct.get(),
-            follower_broker=f_broker.get(), follower_env=f_env.get(),
-            follower_account=f_acct.get(), ratio=ratio_var.get())
         try:
+            draft = controller.draft_from_labels(
+                name=name_var.get(),
+                source_label=source_label_var.get(),
+                follower_label=follower_label_var.get(),
+                ratio=ratio_var.get())
             if edit_index[0] is None:
                 controller.add_pair(draft)
             else:
@@ -440,5 +664,6 @@ def build_panel(parent, controller: ReplicationSettingsController):
     # cancel_btn is packed (to the left of submit) only while editing.
 
     controller.load()
+    refresh_accounts()
     refresh()
     return frame

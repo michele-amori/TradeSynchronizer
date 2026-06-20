@@ -472,6 +472,20 @@ same follower identity, which would otherwise double-trade it. See
 [`docs/design/multi-follower.md`](docs/design/multi-follower.md) for the
 design and the per-follower gateway model.
 
+#### Reusable accounts
+
+When the same account appears in several pairs (a fan-out source, say),
+you don't retype its broker / env / id each time. The **Accounts**
+section at the top of the Replication tab is a small address book: add
+each account once under a friendly label, and the pair form's Source /
+Follower dropdowns then list those labels. Picking one copies its fields
+into the pair. The book is saved to `config/accounts.json` (gitignored;
+see `config/accounts.json.example`) and is a **GUI convenience only** —
+the engine never reads it, and pairs keep their own copy of the fields,
+so the book can be changed or deleted without affecting replication. An
+account still referenced by a pair can't be deleted; the GUI says which
+pair is using it.
+
 ## Verbose troubleshooting mode (default ON)
 
 While calibrating the system against real Tradovate + real

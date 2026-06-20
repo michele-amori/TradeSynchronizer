@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "_comment": "GUI-only reusable account address book. The Settings panel reads/writes config/accounts.json (copy this file, drop the .example). Each account has a friendly unique 'label' plus broker/env/account_id; the pair form then offers the labels in dropdowns so you don't retype the fields. This file is a UI convenience ONLY: the engine never reads it, and a pair already stores its own copy of the fields, so deleting accounts.json never affects replication. An account that is still referenced by a pair cannot be deleted from the GUI.",
+  "accounts": [
+    {
+      "label": "Example Tradovate demo",
+      "broker": "tradovate",
+      "env": "demo",
+      "account_id": "YOUR_TRADOVATE_ACCOUNT_ID"
+    },
+    {
+      "label": "Example IBKR paper",
+      "broker": "ibkr",
+      "env": "demo",
+      "account_id": "YOUR_IBKR_PAPER_ACCOUNT"
+    }
+  ]
+}

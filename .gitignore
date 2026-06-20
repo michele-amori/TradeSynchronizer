@@ -32,6 +32,10 @@ venv/
 # Local backups of the routing config (created before edits). They
 # contain the user's real account ids, so they must never be committed.
 /config/replication.json.bak-*
+# GUI account address book — user-local (contains the user's own real
+# account ids). UI convenience only; see config/accounts.json.example.
+/config/accounts.json
+/config/accounts.json.bak-*
 
 # OS noise
 .DS_Store

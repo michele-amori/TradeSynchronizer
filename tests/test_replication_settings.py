@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tradesync.account_book import Account
 from tradesync.replication_config import ReplicationConfigError
 from tradesync.ui.replication_settings import (
     PairDraft,
@@ -247,6 +248,118 @@ class TestPairDraftRatio(unittest.TestCase):
         ctl.save()
         ctl.load()
         self.assertEqual(ctl.pairs[0].ratio, 0.5)
+
+
+class TestAccountBook(_Base):
+    """The reusable-account address book behind the pair-form dropdowns."""
+
+    def _acct(self, label="Miki TVT", broker="tradovate", env="demo",
+              account_id="50000001"):
+        return Account(label=label, broker=broker, env=env,
+                       account_id=account_id)
+
+    def test_add_account_and_list(self):
+        self.ctl.add_account(self._acct(label="A"))
+        self.ctl.add_account(self._acct(label="B", broker="ibkr",
+                                        account_id="DU1"))
+        self.assertEqual(self.ctl.account_labels(), ["A", "B"])
+
+    def test_add_invalid_account_rejected_without_mutation(self):
+        with self.assertRaises(ReplicationConfigError):
+            self.ctl.add_account(self._acct(broker="schwab"))
+        self.assertEqual(self.ctl.accounts, [])
+
+    def test_add_empty_account_id_rejected(self):
+        with self.assertRaises(ReplicationConfigError):
+            self.ctl.add_account(self._acct(account_id="  "))
+
+    def test_duplicate_label_rejected_case_insensitive(self):
+        self.ctl.add_account(self._acct(label="Dup"))
+        with self.assertRaises(ReplicationConfigError):
+            self.ctl.add_account(self._acct(label="dup", account_id="999"))
+        self.assertEqual(len(self.ctl.accounts), 1)
+
+    def test_draft_from_labels_copies_fields(self):
+        self.ctl.add_account(self._acct(label="src", broker="tradovate",
+                                        account_id="50000001"))
+        self.ctl.add_account(self._acct(label="flw", broker="ibkr",
+                                        account_id="DU0000002"))
+        draft = self.ctl.draft_from_labels(
+            name="p", source_label="src", follower_label="flw", ratio="1.0")
+        pair = draft.to_pair()
+        self.assertEqual(pair.source.identity, "tradovate_demo_50000001")
+        self.assertEqual(pair.follower.identity, "ibkr_demo_DU0000002")
+
+    def test_draft_from_unknown_label_raises(self):
+        self.ctl.add_account(self._acct(label="only"))
+        with self.assertRaises(ReplicationConfigError):
+            self.ctl.draft_from_labels(
+                name="p", source_label="only", follower_label="ghost",
+                ratio="1.0")
+
+    def test_remove_unused_account(self):
+        self.ctl.add_account(self._acct(label="gone"))
+        self.ctl.remove_account("gone")
+        self.assertEqual(self.ctl.accounts, [])
+
+    def test_remove_unknown_account_raises(self):
+        with self.assertRaises(ReplicationConfigError):
+            self.ctl.remove_account("nope")
+
+    def test_remove_in_use_account_blocked_and_names_pair(self):
+        self.ctl.add_account(self._acct(label="src", broker="tradovate",
+                                        account_id="50000001"))
+        self.ctl.add_account(self._acct(label="flw", broker="ibkr",
+                                        account_id="DU0000002"))
+        self.ctl.add_pair(self.ctl.draft_from_labels(
+            name="live mirror", source_label="src", follower_label="flw",
+            ratio="1.0"))
+        with self.assertRaises(ReplicationConfigError) as ctx:
+            self.ctl.remove_account("flw")
+        # the error names the offending pair so the user knows why
+        self.assertIn("live mirror", str(ctx.exception))
+        # and the account is still there
+        self.assertIn("flw", self.ctl.account_labels())
+
+    def test_pairs_using_account_reports_both_sides(self):
+        self.ctl.add_account(self._acct(label="hub", broker="tradovate",
+                                        account_id="50000001"))
+        self.ctl.add_account(self._acct(label="f1", broker="ibkr",
+                                        account_id="DU1"))
+        self.ctl.add_account(self._acct(label="f2", broker="ibkr",
+                                        account_id="DU2"))
+        self.ctl.add_pair(self.ctl.draft_from_labels(
+            name="a", source_label="hub", follower_label="f1", ratio="1.0"))
+        self.ctl.add_pair(self.ctl.draft_from_labels(
+            name="b", source_label="hub", follower_label="f2", ratio="1.0"))
+        # hub is the source of both pairs
+        self.assertEqual(set(self.ctl.pairs_using_account("hub")), {"a", "b"})
+        self.assertEqual(self.ctl.pairs_using_account("f1"), ["a"])
+
+    def test_account_book_round_trips_on_disk(self):
+        self.ctl.add_account(self._acct(label="persist", broker="ibkr",
+                                        account_id="U0000001"))
+        self.ctl.save_accounts()
+        ctl2 = ReplicationSettingsController(
+            config_path=self.path,
+            accounts_path=self.ctl._accounts_path)
+        ctl2.load()
+        self.assertEqual(ctl2.account_labels(), ["persist"])
+        self.assertEqual(ctl2.accounts[0].account_id, "U0000001")
+
+    def test_account_rows_flag_in_use(self):
+        self.ctl.add_account(self._acct(label="src", broker="tradovate",
+                                        account_id="50000001"))
+        self.ctl.add_account(self._acct(label="unused", broker="ibkr",
+                                        account_id="DU9"))
+        self.ctl.add_account(self._acct(label="flw", broker="ibkr",
+                                        account_id="DU0000002"))
+        self.ctl.add_pair(self.ctl.draft_from_labels(
+            name="p", source_label="src", follower_label="flw", ratio="1.0"))
+        rows = {r["label"]: r["in_use_by"] for r in self.ctl.account_rows()}
+        self.assertEqual(rows["src"], ["p"])
+        self.assertEqual(rows["flw"], ["p"])
+        self.assertEqual(rows["unused"], [])
 
 
 if __name__ == "__main__":
