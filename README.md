@@ -736,7 +736,7 @@ A versioned pre-commit hook lives at `scripts/pre-commit.sh` and
 runs three checks on every `git commit`:
 
 1. **Tests** (`python -m unittest discover tests`) — blocks on
-   failure. Currently 637 tests, ~6 s wall.
+   failure. Currently 653 tests, ~6 s wall.
 2. **`.app` rebuild** (`./build_app.sh`) — blocks if the bundle
    doesn't build (catches stale imports, broken shebangs, etc.).
 3. **README freshness** — warns and prompts if the staged diff
@@ -757,7 +757,7 @@ push) with `git commit --no-verify`.
 ### Test + coverage
 
 ```bash
-.venv/bin/python -m unittest discover tests              # ~6s, 651 tests
+.venv/bin/python -m unittest discover tests              # ~6s, 653 tests
 .venv/bin/python -m coverage run --source=tradesync \
     -m unittest discover tests
 .venv/bin/python -m coverage report --skip-empty
