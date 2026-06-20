@@ -37,31 +37,10 @@ import logging
 import os
 import socket
 import subprocess
-import sys
 import time
 from typing import Optional
 
-
-def _is_apple_silicon_hardware() -> bool:
-    """Return True iff the underlying CPU is Apple Silicon.
-
-    Mirrors tradesync.ui.app._is_apple_silicon_hardware. Duplicated
-    here to keep tradingview_launcher importable without dragging in
-    the entire UI module. The sysctl-based detection works even when
-    the caller itself is running under Rosetta (which would make
-    platform.machine() return "x86_64" on M-series hardware).
-    """
-    if sys.platform != "darwin":
-        return False
-    try:
-        out = subprocess.check_output(
-            ["/usr/sbin/sysctl", "-n", "hw.optional.arm64"],
-            text=True, stderr=subprocess.DEVNULL,
-        ).strip()
-        return out == "1"
-    except (subprocess.SubprocessError, FileNotFoundError, OSError):
-        return False
-
+from .platform_util import is_apple_silicon_hardware
 
 logger = logging.getLogger("tradesync.tv_launcher")
 
@@ -222,7 +201,7 @@ def _launch(port: int) -> None:
     # rendering becomes ~3x slower. Verified empirically: TV under
     # Rosetta = chart almost frozen; same TV, same flags, same
     # mitmproxy config but launched via `arch -arm64` = fluid.
-    if _is_apple_silicon_hardware():
+    if is_apple_silicon_hardware():
         argv = ["/usr/bin/arch", "-arm64"] + argv
     subprocess.Popen(
         argv,
