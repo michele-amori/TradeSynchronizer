@@ -50,7 +50,7 @@ import ssl
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import Callable, Optional
 
 from wsproto import WSConnection, ConnectionType
 from wsproto.events import (

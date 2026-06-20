@@ -22,7 +22,6 @@ concern rather than leaking it into the replicator.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from ..order_event import (
     BracketSpec,

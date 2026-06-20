@@ -34,7 +34,7 @@ last Order, keyed by id, to rebuild the modify payload.
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional
+from typing import Dict
 
 from ibapi.contract import Contract
 from ibapi.order import Order
