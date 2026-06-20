@@ -412,11 +412,54 @@ def build_panel(parent, controller: ReplicationSettingsController):
       * Replication pairs — pick a saved source + follower account from
         dropdowns (no re-typing), set a ratio, add/edit/enable/remove.
 
-    It reads/writes through the controller, saving on every mutation."""
+    It reads/writes through the controller, saving on every mutation.
+
+    The whole panel lives inside a vertical scroll area: the stacked
+    Accounts + pairs + add-pair form can be taller than the window, and
+    without scrolling the bottom (the 'Add pair' button) would fall below
+    the fold and be unreachable. The Canvas + Scrollbar wrapper keeps
+    everything accessible at any window height; `frame` (the scrollable
+    interior) is what every widget below is built into, exactly as
+    before — only its parent changed."""
     import tkinter as tk
     from tkinter import ttk, messagebox
 
-    frame = ttk.Frame(parent, padding=12)
+    # Scroll container: a Canvas holding an interior frame, with a
+    # vertical scrollbar. Everything below builds into `frame`.
+    outer = ttk.Frame(parent)
+    outer.pack(fill="both", expand=True)
+    canvas = tk.Canvas(outer, highlightthickness=0)
+    vscroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+    canvas.configure(yscrollcommand=vscroll.set)
+    vscroll.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+
+    frame = ttk.Frame(canvas, padding=12)
+    _win = canvas.create_window((0, 0), window=frame, anchor="nw")
+
+    def _on_frame_configure(_event=None):
+        # Keep the scroll region matching the interior's full height.
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    def _on_canvas_configure(event):
+        # Make the interior frame span the canvas width (so content uses
+        # the full width and wraplength labels behave), while its height
+        # stays natural and drives the scroll region.
+        canvas.itemconfigure(_win, width=event.width)
+
+    frame.bind("<Configure>", _on_frame_configure)
+    canvas.bind("<Configure>", _on_canvas_configure)
+
+    def _on_mousewheel(event):
+        # Trackpad / wheel scrolling on macOS (delta is small integers).
+        canvas.yview_scroll(-1 * int(event.delta), "units")
+
+    # Bind the wheel only while the pointer is over this panel, so it
+    # doesn't hijack scrolling elsewhere in the app.
+    canvas.bind("<Enter>",
+                lambda _e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+    canvas.bind("<Leave>",
+                lambda _e: canvas.unbind_all("<MouseWheel>"))
 
     # ══ Section 1: Accounts (the reusable address book) ══════════════ #
     acct_box = ttk.LabelFrame(frame, text="Accounts", padding=8)
@@ -792,4 +835,7 @@ def build_panel(parent, controller: ReplicationSettingsController):
     controller.load()
     refresh_accounts()
     refresh()
-    return frame
+    # Return the scroll container (already packed into `parent`). The
+    # caller may pack/grid it again harmlessly, but we pack it here so the
+    # panel works regardless.
+    return outer

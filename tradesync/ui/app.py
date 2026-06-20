@@ -321,8 +321,8 @@ class TradeSyncApp:
             rep_tab = ttk.Frame(self.notebook)
             self.notebook.add(rep_tab, text="Replication")
             self._replication_controller = ReplicationSettingsController()
-            panel = build_panel(rep_tab, self._replication_controller)
-            panel.pack(fill="both", expand=True)
+            # build_panel packs its scroll container into rep_tab itself.
+            build_panel(rep_tab, self._replication_controller)
         except Exception:
             logging.getLogger("tradesync.ui").exception(
                 "Failed to build the Replication tab — continuing without it")
