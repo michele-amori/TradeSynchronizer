@@ -459,6 +459,19 @@ These keys live in `.env`, shared by every engine. The unified `EventReplicator`
 | IBKR source-account filter | Which IBKR account(s) to replicate orders FROM. Now driven by the **Replication** tab: each enabled IBKR-source pair contributes its source account. A legacy `IBKR_WATCHED_ACCOUNTS` value in an env file is still honoured as a fallback when no IBKR-source pairs are configured; empty = all. |
 | `TRADOVATE_IS_AUTOMATED=false` *(default)* | Value put into the `isAutomated` field of every Tradovate order payload. Default OFF because trade-copier services (incl. TradeSyncer) typically filter out algorithmic orders by default — leaving this ON would let the leader account fill but silently skip the leader→follower fanout. Flip ON only if your upstream is genuinely autonomous and you want orders labelled as such for regulatory/reporting purposes. |
 
+### Multiple followers (one source → N followers)
+
+A single source can fan out to several follower accounts at once. In
+the **Replication** tab, add one enabled pair per follower, all sharing
+the same source. Each pair carries its own replication `ratio` (so one
+follower can mirror full size and another half size) and, for IBKR
+followers reached through separate logins, its own gateway `host` /
+`port` / `client_id` — letting each follower run on its own IB Gateway
+instance. Config validation rejects two enabled pairs that point at the
+same follower identity, which would otherwise double-trade it. See
+[`docs/design/multi-follower.md`](docs/design/multi-follower.md) for the
+design and the per-follower gateway model.
+
 ## Verbose troubleshooting mode (default ON)
 
 While calibrating the system against real Tradovate + real
@@ -744,11 +757,18 @@ push) with `git commit --no-verify`.
 ### Test + coverage
 
 ```bash
-.venv/bin/python -m unittest discover tests              # ~6s, 637 tests
+.venv/bin/python -m unittest discover tests              # ~6s, 651 tests
 .venv/bin/python -m coverage run --source=tradesync \
     -m unittest discover tests
 .venv/bin/python -m coverage report --skip-empty
 ```
+
+The suite runs with **no configuration** — you don't need credentials
+or a broker connection to run it. A couple of tests exercise
+`Config.load()`, which reads a real `.env.<env>` file; on a fresh clone
+those files don't exist yet, so those tests **skip themselves** (you'll
+see `skipped=2`) rather than fail. Once you've created your `.env.demo`
+/ `.env.live` (see *One-time setup*), they run normally.
 
 Current coverage of the core business logic (parser, replicator,
 order map, symbol converter, traffic logger, preflight, notify,

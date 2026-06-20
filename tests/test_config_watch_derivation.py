@@ -107,10 +107,21 @@ class TestDeriveWatchList(unittest.TestCase):
             tmp.cleanup()
 
 
+def _skip_without_demo_env():
+    """Config.load() reads a real .env.demo from disk. On a fresh clone
+    that file doesn't exist (it's per-user and gitignored), so these two
+    tests can't run there — skip rather than fail. They run normally on a
+    configured machine."""
+    if not cfgmod.env_file_for("demo").exists():
+        raise unittest.SkipTest(
+            ".env.demo not present (expected on a fresh checkout)")
+
+
 class TestConfigLoadPrecedence(unittest.TestCase):
     """Config.load: pairs win; env var is the fallback."""
 
     def test_env_fallback_when_no_pairs(self):
+        _skip_without_demo_env()
         tmp, path = _write_config([_tradovate_source_pair()])  # no ibkr src
         try:
             with patch("tradesync.replication_config."
@@ -124,6 +135,7 @@ class TestConfigLoadPrecedence(unittest.TestCase):
             tmp.cleanup()
 
     def test_pairs_win_over_env(self):
+        _skip_without_demo_env()
         tmp, path = _write_config([_ibkr_source_pair("U0000001")])
         try:
             with patch("tradesync.replication_config."
