@@ -29,7 +29,13 @@ class _Base(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.path = Path(self._tmp.name) / "config" / "replication.json"
-        self.ctl = ReplicationSettingsController(config_path=self.path)
+        # Pin BOTH paths into the temp dir. Without an explicit
+        # accounts_path the controller would fall back to the real
+        # config/accounts.json and tests would scribble on the user's
+        # actual address book.
+        self.accounts_path = Path(self._tmp.name) / "config" / "accounts.json"
+        self.ctl = ReplicationSettingsController(
+            config_path=self.path, accounts_path=self.accounts_path)
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -154,7 +160,8 @@ class TestPersistence(_Base):
         self.ctl.save()
         self.assertTrue(self.path.exists())
 
-        ctl2 = ReplicationSettingsController(config_path=self.path)
+        ctl2 = ReplicationSettingsController(
+            config_path=self.path, accounts_path=self.accounts_path)
         ctl2.load()
         self.assertEqual(len(ctl2.pairs), 1)
         self.assertEqual(ctl2.pairs[0].name, "live mirror")
@@ -241,8 +248,10 @@ class TestPairDraftRatio(unittest.TestCase):
 
     def test_added_pair_persists_ratio(self):
         # End to end through the controller: add with a ratio, reload.
+        tmp = Path(tempfile.mkdtemp()) / "config"
         ctl = ReplicationSettingsController(
-            config_path=Path(tempfile.mkdtemp()) / "config" / "rep.json")
+            config_path=tmp / "rep.json",
+            accounts_path=tmp / "accounts.json")
         d = _draft(); d.ratio = "0.5"
         ctl.add_pair(d)
         ctl.save()
@@ -342,7 +351,7 @@ class TestAccountBook(_Base):
         self.ctl.save_accounts()
         ctl2 = ReplicationSettingsController(
             config_path=self.path,
-            accounts_path=self.ctl._accounts_path)
+            accounts_path=self.accounts_path)
         ctl2.load()
         self.assertEqual(ctl2.account_labels(), ["persist"])
         self.assertEqual(ctl2.accounts[0].account_id, "U0000001")
