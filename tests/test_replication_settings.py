@@ -449,5 +449,113 @@ class TestAccountBook(_Base):
             self.ctl.account_draft_for("nope")
 
 
+class TestMultiFollowerAndGrouping(_Base):
+    """Bulk master→followers add, and the grouped master/followers view."""
+
+    def _master_and_followers(self):
+        self.ctl.add_account(self._acct(label="Master", broker="tradovate",
+                                        account_id="50000001"))
+        for lab, aid in [("F1", "DU1"), ("F2", "DU2"), ("F3", "DU3")]:
+            self.ctl.add_account(self._acct(label=lab, broker="ibkr",
+                                            account_id=aid))
+
+    def _acct(self, label="X", broker="tradovate", env="demo",
+              account_id="50000001"):
+        return Account(label=label, broker=broker, env=env,
+                       account_id=account_id)
+
+    def test_bulk_add_creates_one_pair_per_follower(self):
+        self._master_and_followers()
+        res = self.ctl.add_followers_to_source(
+            source_label="Master",
+            followers=[("F1", "1.0"), ("F2", "0.5"), ("F3", "2")])
+        self.assertEqual(len(res["added"]), 3)
+        self.assertEqual(res["skipped"], [])
+        self.assertEqual(len(self.ctl.pairs), 3)
+        # per-follower ratios are respected
+        ratios = {p.follower.account_id: p.ratio for p in self.ctl.pairs}
+        self.assertEqual(ratios["DU1"], 1.0)
+        self.assertEqual(ratios["DU2"], 0.5)
+        self.assertEqual(ratios["DU3"], 2.0)
+        # all share the one source
+        self.assertEqual({p.source.identity for p in self.ctl.pairs},
+                         {"tradovate_demo_50000001"})
+
+    def test_bulk_add_generates_unique_names(self):
+        self._master_and_followers()
+        self.ctl.add_followers_to_source(
+            source_label="Master", followers=[("F1", "1.0")])
+        # a second bulk add with the same prefix must not clash
+        res = self.ctl.add_followers_to_source(
+            source_label="Master", name_prefix="Master",
+            followers=[("F2", "1.0")])
+        names = [p.name for p in self.ctl.pairs]
+        self.assertEqual(len(names), len(set(names)))  # all unique
+
+    def test_bulk_add_skips_existing_follower_links(self):
+        self._master_and_followers()
+        self.ctl.add_followers_to_source(
+            source_label="Master", followers=[("F1", "1.0")])
+        res = self.ctl.add_followers_to_source(
+            source_label="Master",
+            followers=[("F1", "1.0"), ("F2", "1.0")])
+        self.assertEqual(res["skipped"], ["F1"])
+        self.assertEqual(len(res["added"]), 1)
+        self.assertEqual(len(self.ctl.pairs), 2)
+
+    def test_bulk_add_invalid_ratio_adds_nothing(self):
+        self._master_and_followers()
+        with self.assertRaises(ReplicationConfigError):
+            self.ctl.add_followers_to_source(
+                source_label="Master",
+                followers=[("F1", "1.0"), ("F2", "notanumber")])
+        # atomic: nothing committed
+        self.assertEqual(len(self.ctl.pairs), 0)
+
+    def test_bulk_add_unknown_source_raises(self):
+        self._master_and_followers()
+        with self.assertRaises(ReplicationConfigError):
+            self.ctl.add_followers_to_source(
+                source_label="ghost", followers=[("F1", "1.0")])
+
+    def test_bulk_add_unknown_follower_raises(self):
+        self._master_and_followers()
+        with self.assertRaises(ReplicationConfigError):
+            self.ctl.add_followers_to_source(
+                source_label="Master", followers=[("ghost", "1.0")])
+
+    def test_grouped_rows_groups_by_master(self):
+        self._master_and_followers()
+        self.ctl.add_account(self._acct(label="Master2", broker="tradovate",
+                                        account_id="50000002"))
+        self.ctl.add_followers_to_source(
+            source_label="Master",
+            followers=[("F1", "1.0"), ("F2", "0.5")])
+        self.ctl.add_followers_to_source(
+            source_label="Master2", followers=[("F3", "1.0")])
+        groups = self.ctl.grouped_rows()
+        self.assertEqual(len(groups), 2)
+        g0 = next(g for g in groups
+                  if g["source_identity"] == "tradovate_demo_50000001")
+        self.assertEqual(g0["source_label"], "Master")
+        self.assertEqual(len(g0["followers"]), 2)
+        # pair_index maps back to the underlying pair
+        idxs = [f["pair_index"] for f in g0["followers"]]
+        self.assertEqual([self.ctl.pairs[i].follower.account_id for i in idxs],
+                         ["DU1", "DU2"])
+
+    def test_grouped_rows_label_none_for_handedited_account(self):
+        # A pair whose endpoint isn't in the book shows label None.
+        self.ctl.add_pair(PairDraft(
+            name="hand", source_broker="tradovate", source_env="demo",
+            source_account="99999999",
+            follower_broker="ibkr", follower_env="demo",
+            follower_account="DUZ", ratio="1.0"))
+        groups = self.ctl.grouped_rows()
+        self.assertEqual(len(groups), 1)
+        self.assertIsNone(groups[0]["source_label"])
+        self.assertIsNone(groups[0]["followers"][0]["follower_label"])
+
+
 if __name__ == "__main__":
     unittest.main()

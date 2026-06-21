@@ -499,6 +499,24 @@ Accounts not used by any pair can be edited freely. To change the
 broker / env / id of an in-use account, edit or remove those pairs
 first.
 
+#### Grouped view + bulk follower add
+
+The pairs are shown as a tree grouped by master: each source account is
+a top-level row ("Master — N followers") with its followers nested under
+it, so a fan-out is read at a glance instead of scanning a flat list.
+Select a follower row to Edit / Enable-Disable / Remove that pair; the
+master rows are just headers.
+
+To mirror one master onto several followers, the add form takes multiple
+follower rows — click **+ follower** to add a row, pick the account and
+its own ratio on each, then **Add pair(s)**. Each follower becomes its
+own ordinary pair (master ↔ 1 follower); there is no new multi-follower
+object, so the `replication.json` schema and the engine are unchanged —
+it's purely an input shortcut. Pair names are generated as
+"`<name> – <follower label>`" to stay unique. A follower already paired
+with that master is skipped (the GUI lists which), and the rest are
+still added.
+
 ## Verbose troubleshooting mode (default ON)
 
 While calibrating the system against real Tradovate + real

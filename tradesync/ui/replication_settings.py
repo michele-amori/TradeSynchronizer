@@ -383,6 +383,120 @@ class ReplicationSettingsController:
             })
         return rows
 
+    def _label_for_identity(self, identity: str) -> Optional[str]:
+        """The account label whose identity matches, or None if the
+        endpoint refers to an account not in the book (hand-edited)."""
+        for a in self._book.accounts:
+            if a.identity == identity:
+                return a.label
+        return None
+
+    def grouped_rows(self) -> List[dict]:
+        """A render-friendly tree of master → followers, for the grouped
+        pairs view. One entry per distinct source (master), each holding
+        the pairs (followers) replicated from it. Sources are ordered by
+        first appearance; followers keep their pair order. Each follower
+        row carries its pair index so the panel can map a tree selection
+        back to the underlying pair for edit/remove/toggle."""
+        groups: List[dict] = []
+        by_source: dict = {}
+        for idx, p in enumerate(self._config.pairs):
+            sid = p.source.identity
+            if sid not in by_source:
+                grp = {
+                    "source_identity": sid,
+                    "source_label": self._label_for_identity(sid),
+                    "followers": [],
+                }
+                by_source[sid] = grp
+                groups.append(grp)
+            fid = p.follower.identity
+            by_source[sid]["followers"].append({
+                "pair_index": idx,
+                "name": p.name,
+                "follower_identity": fid,
+                "follower_label": self._label_for_identity(fid),
+                "enabled": p.enabled,
+                "ratio": p.ratio,
+                "needs_gateway": p.follower.broker == "ibkr",
+            })
+        return groups
+
+    def add_followers_to_source(
+            self, *, source_label: str,
+            followers: "List[tuple[str, str]]",
+            name_prefix: str = "") -> "dict":
+        """Bulk-add several followers under one master in a single call.
+
+        `followers` is a list of (follower_label, ratio_str) pairs — each
+        gets its OWN ratio. For each, a SEPARATE ReplicationPair is built
+        (master↔1 follower); there is no new multi-follower object, just N
+        ordinary pairs sharing a source. This is purely an input shortcut.
+
+        Behaviour:
+          * A generated pair name keeps names unique:
+            "<prefix> – <follower label>" (prefix defaults to the source
+            label). Collisions get a numeric suffix.
+          * A follower already paired with this exact source is SKIPPED
+            (not an error) — its label is returned under 'skipped' so the
+            panel can report it.
+          * Any genuinely invalid draft (bad ratio, unknown label) raises
+            ReplicationConfigError and NOTHING is added (validated first,
+            committed only if all-clear).
+
+        Returns {'added': [names...], 'skipped': [labels...]}.
+        """
+        src = self.account_by_label(source_label)
+        if src is None:
+            raise ReplicationConfigError(
+                f"source account {source_label!r} not found — create it "
+                f"in Accounts first")
+        prefix = (name_prefix.strip() or source_label)
+
+        existing_names = {p.name for p in self._config.pairs}
+        existing_links = {
+            (p.source.identity, p.follower.identity)
+            for p in self._config.pairs
+        }
+
+        def _unique(base: str) -> str:
+            cand = base
+            n = 2
+            while cand in existing_names:
+                cand = f"{base} ({n})"
+                n += 1
+            return cand
+
+        # Build + validate everything first; commit only if all valid.
+        staged: List[ReplicationPair] = []
+        skipped: List[str] = []
+        for follower_label, ratio in followers:
+            flw = self.account_by_label(follower_label)
+            if flw is None:
+                raise ReplicationConfigError(
+                    f"follower account {follower_label!r} not found — "
+                    f"create it in Accounts first")
+            if (src.identity, flw.identity) in existing_links:
+                skipped.append(follower_label)
+                continue
+            name = _unique(f"{prefix} – {follower_label}")
+            draft = PairDraft(
+                name=name,
+                source_broker=src.broker, source_env=src.env,
+                source_account=src.account_id,
+                follower_broker=flw.broker, follower_env=flw.env,
+                follower_account=flw.account_id,
+                enabled=True, ratio=ratio)
+            pair = draft.to_pair()
+            pair.validate()
+            staged.append(pair)
+            existing_names.add(name)
+            existing_links.add((src.identity, flw.identity))
+
+        # All valid → commit.
+        self._config.pairs.extend(staged)
+        return {"added": [p.name for p in staged], "skipped": skipped}
+
     def needs_gateway(self) -> bool:
         """True if any pair (enabled or not) has IBKR as its follower —
         i.e. the 'Open IB Gateway' affordance is relevant."""
@@ -623,25 +737,35 @@ def build_panel(parent, controller: ReplicationSettingsController):
         wraplength=520, foreground="#666",
     ).pack(anchor="w", pady=(0, 8))
 
-    # Existing pairs list.
+    # Existing pairs — grouped master to followers in a tree. Each master
+    # is a top-level node; its followers are children. A child row maps
+    # back to its pair via the iid (the pair index as a string); master
+    # rows have a non-numeric iid and aren't actionable themselves.
     list_frame = ttk.Frame(frame)
     list_frame.pack(fill="both", expand=True)
-    listbox = tk.Listbox(list_frame, height=6)
-    listbox.pack(side="left", fill="both", expand=True)
+    tree = ttk.Treeview(list_frame, height=9, show="tree",
+                        selectmode="browse")
+    tree.pack(side="left", fill="both", expand=True)
 
     def refresh():
-        listbox.delete(0, tk.END)
-        for row in controller.summary_rows():
-            mark = "✓" if row["enabled"] else "·"
-            gw = " [GW]" if row["needs_gateway"] else ""
-            # Only surface the ratio when it actually scales (≠ 1.0), to
-            # keep the common exact-mirror case uncluttered.
-            ratio = row.get("ratio", 1.0)
-            rt = f" ×{ratio:g}" if ratio != 1.0 else ""
-            listbox.insert(
-                tk.END,
-                f"{mark} {row['name']}: {row['source']} → "
-                f"{row['follower']}{rt}{gw}")
+        tree.delete(*tree.get_children())
+        for gi, grp in enumerate(controller.grouped_rows()):
+            src = grp["source_label"] or grp["source_identity"]
+            n = len(grp["followers"])
+            plural = "follower" if n == 1 else "followers"
+            master_iid = f"m{gi}"
+            tree.insert("", "end", iid=master_iid, open=True,
+                        text=f"▾  {src}   —   {n} {plural}")
+            for f in grp["followers"]:
+                mark = "✓" if f["enabled"] else "·"
+                gw = "  [GW]" if f["needs_gateway"] else ""
+                ratio = f["ratio"]
+                # Show the ratio only when it actually scales (not 1.0),
+                # to keep the common exact-mirror case uncluttered.
+                rt = f"  x{ratio:g}" if ratio != 1.0 else ""
+                flw = f["follower_label"] or f["follower_identity"]
+                tree.insert(master_iid, "end", iid=str(f["pair_index"]),
+                            text=f"     {mark}  -> {flw}{rt}{gw}")
 
     def _persist_and_refresh():
         """Write the current pairs to disk and redraw both lists. Every
@@ -665,8 +789,13 @@ def build_panel(parent, controller: ReplicationSettingsController):
     edit_index = [None]
 
     def _selected_index() -> Optional[int]:
-        sel = listbox.curselection()
-        return sel[0] if sel else None
+        """The pair index for the current tree selection, or None. Master
+        rows (iid like 'm0') aren't pairs, so they return None."""
+        sel = tree.selection()
+        if not sel:
+            return None
+        iid = sel[0]
+        return int(iid) if iid.isdigit() else None
 
     def on_toggle():
         i = _selected_index()
@@ -704,8 +833,7 @@ def build_panel(parent, controller: ReplicationSettingsController):
 
     name_var = tk.StringVar()
     source_label_var = tk.StringVar()
-    follower_label_var = tk.StringVar()
-    ratio_var = tk.StringVar(value="1.0")
+    ratio_var = tk.StringVar(value="1.0")  # used only in single-edit mode
 
     def _row(label, build_widgets):
         r = ttk.Frame(form)
@@ -713,17 +841,17 @@ def build_panel(parent, controller: ReplicationSettingsController):
         ttk.Label(r, text=label, width=10).pack(side="left")
         build_widgets(r)
 
-    # The two account dropdowns, kept in module scope so refresh_accounts
-    # can repopulate their value lists when the book changes.
     source_combo = [None]
-    follower_combo = [None]
+    # Dynamic follower rows for ADD mode. Each entry is a dict with its
+    # own StringVars + the row Frame, so each follower gets its own ratio.
+    follower_rows: list = []
 
     def _sync_account_dropdowns():
         labels = controller.account_labels()
-        for holder in (source_combo, follower_combo):
-            combo = holder[0]
-            if combo is not None:
-                combo.configure(values=labels)
+        if source_combo[0] is not None:
+            source_combo[0].configure(values=labels)
+        for fr in follower_rows:
+            fr["combo"].configure(values=labels)
 
     def _build_name(r):
         ttk.Entry(r, textvariable=name_var, width=24).pack(side="left", padx=2)
@@ -734,39 +862,79 @@ def build_panel(parent, controller: ReplicationSettingsController):
         c.pack(side="left", padx=2)
         source_combo[0] = c
 
-    def _build_follower(r):
-        c = ttk.Combobox(r, textvariable=follower_label_var, width=28,
-                         values=controller.account_labels(), state="readonly")
-        c.pack(side="left", padx=2)
-        follower_combo[0] = c
-
-    def _build_ratio(r):
-        ttk.Entry(r, textvariable=ratio_var, width=8).pack(side="left", padx=2)
-        ttk.Label(r, text="follower size = master size × ratio "
-                          "(rounded, min 1; 1.0 = exact mirror)"
-                  ).pack(side="left", padx=2)
-
     _row("Name", _build_name)
     _row("Source", _build_source)
-    _row("Follower", _build_follower)
-    _row("Ratio", _build_ratio)
+
+    # ── follower rows (one per follower, each with its own ratio) ──── #
+    followers_box = ttk.Frame(form)
+    followers_box.pack(fill="x", pady=(2, 0))
+
+    def _add_follower_row(label_value="", ratio_value="1.0"):
+        r = ttk.Frame(followers_box)
+        r.pack(fill="x", pady=2)
+        ttk.Label(r, text="Follower", width=10).pack(side="left")
+        lab = tk.StringVar(value=label_value)
+        rat = tk.StringVar(value=ratio_value)
+        combo = ttk.Combobox(r, textvariable=lab, width=24,
+                             values=controller.account_labels(),
+                             state="readonly")
+        combo.pack(side="left", padx=2)
+        ttk.Label(r, text="×").pack(side="left", padx=(6, 0))
+        ttk.Entry(r, textvariable=rat, width=6).pack(side="left", padx=2)
+        entry = {"frame": r, "label": lab, "ratio": rat, "combo": combo}
+
+        def _remove_this():
+            # Keep at least one follower row in add mode.
+            if edit_index[0] is None and len(follower_rows) <= 1:
+                return
+            entry["frame"].destroy()
+            follower_rows.remove(entry)
+
+        rm = ttk.Button(r, text="–", width=3, command=_remove_this)
+        rm.pack(side="left", padx=(4, 0))
+        entry["remove_btn"] = rm
+        follower_rows.append(entry)
+        return entry
+
+    # "+ follower" control (hidden during single-pair edit).
+    add_follower_btn = ttk.Button(
+        form, text="+ follower",
+        command=lambda: _add_follower_row())
+
+    def _build_ratio_help(r):
+        ttk.Label(r, text="× = follower size = master size × ratio "
+                          "(rounded, min 1; 1.0 = exact mirror)",
+                  foreground="#666").pack(side="left", padx=2)
+
+    add_follower_btn.pack(anchor="w", pady=(2, 0))
+    _row("", _build_ratio_help)
     ttk.Label(
         form,
-        text=("Source and Follower are accounts from the Accounts list "
-              "above. Add the account there first if it isn't listed."),
+        text=("Source and followers are accounts from the Accounts list "
+              "above. Pick several followers to mirror one master onto all "
+              "of them at once — each becomes its own pair, with its own "
+              "ratio. Add the account above first if it isn't listed."),
         wraplength=520, foreground="#666",
     ).pack(anchor="w", pady=(4, 0))
 
+    def _reset_follower_rows():
+        for fr in list(follower_rows):
+            fr["frame"].destroy()
+        follower_rows.clear()
+        _add_follower_row()
+
     def _clear_form():
-        name_var.set(""); source_label_var.set(""); follower_label_var.set("")
+        name_var.set(""); source_label_var.set("")
         ratio_var.set("1.0")
+        _reset_follower_rows()
 
     def _exit_edit_mode():
         """Leave edit mode: clear the form and restore the add-pair UI."""
         edit_index[0] = None
         form.configure(text="Add a pair")
-        submit_btn.configure(text="Add pair")
+        submit_btn.configure(text="Add pair(s)")
         cancel_btn.pack_forget()
+        add_follower_btn.pack(anchor="w", pady=(2, 0))
         _clear_form()
 
     def _label_for_endpoint(identity: str) -> str:
@@ -791,8 +959,13 @@ def build_panel(parent, controller: ReplicationSettingsController):
         src_label = _label_for_endpoint(src_id)
         flw_label = _label_for_endpoint(flw_id)
         source_label_var.set(src_label)
-        follower_label_var.set(flw_label)
-        ratio_var.set(draft.ratio)
+        # Editing a single pair: collapse to exactly one follower row, and
+        # hide the "+ follower" control (bulk-add is an add-mode feature).
+        for fr in list(follower_rows):
+            fr["frame"].destroy()
+        follower_rows.clear()
+        _add_follower_row(label_value=flw_label, ratio_value=draft.ratio)
+        add_follower_btn.pack_forget()
         edit_index[0] = i
         form.configure(text=f"Edit pair: {draft.name}")
         submit_btn.configure(text="Update pair")
@@ -805,28 +978,48 @@ def build_panel(parent, controller: ReplicationSettingsController):
                 "account above, or pick replacements from the dropdowns.")
 
     def on_submit():
+        # Gather the follower rows the user actually filled in.
+        chosen = [(fr["label"].get().strip(), fr["ratio"].get().strip())
+                  for fr in follower_rows if fr["label"].get().strip()]
+        if not chosen:
+            messagebox.showerror("Invalid pair",
+                                 "Pick at least one follower account.")
+            return
         try:
-            draft = controller.draft_from_labels(
-                name=name_var.get(),
-                source_label=source_label_var.get(),
-                follower_label=follower_label_var.get(),
-                ratio=ratio_var.get())
             if edit_index[0] is None:
-                controller.add_pair(draft)
+                # Add mode: bulk-create one pair per chosen follower.
+                result = controller.add_followers_to_source(
+                    source_label=source_label_var.get(),
+                    followers=chosen,
+                    name_prefix=name_var.get())
             else:
+                # Edit mode: exactly one follower row, update in place.
+                flw_label, ratio = chosen[0]
+                draft = controller.draft_from_labels(
+                    name=name_var.get(),
+                    source_label=source_label_var.get(),
+                    follower_label=flw_label, ratio=ratio)
                 controller.update_pair(edit_index[0], draft)
+                result = None
         except (ReplicationConfigError, IndexError) as e:
             messagebox.showerror("Invalid pair", str(e))
             return
         # Add pair also SAVES — there is no separate Save button.
         _persist_and_refresh()
         _exit_edit_mode()
+        # Report any skipped duplicates from a bulk add.
+        if result and result["skipped"]:
+            joined = ", ".join(result["skipped"])
+            messagebox.showinfo(
+                "Some followers skipped",
+                f"Already paired with this master, so left unchanged: "
+                f"{joined}.")
 
     # Button row, pinned to the bottom of the form as its own full-width
     # strip so it can never be pushed off-screen by the fields above.
     btn_row = ttk.Frame(form)
     btn_row.pack(side="top", fill="x", pady=(8, 0))
-    submit_btn = ttk.Button(btn_row, text="Add pair", command=on_submit)
+    submit_btn = ttk.Button(btn_row, text="Add pair(s)", command=on_submit)
     submit_btn.pack(side="right", padx=(6, 0))
     cancel_btn = ttk.Button(btn_row, text="Cancel edit",
                             command=lambda: _exit_edit_mode())
@@ -835,6 +1028,7 @@ def build_panel(parent, controller: ReplicationSettingsController):
     controller.load()
     refresh_accounts()
     refresh()
+    _reset_follower_rows()
     # Return the scroll container (already packed into `parent`). The
     # caller may pack/grid it again harmlessly, but we pack it here so the
     # panel works regardless.
