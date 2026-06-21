@@ -36,9 +36,7 @@ from tkinter import messagebox, ttk
 from typing import Optional
 
 from ..config import (
-    MissingAppCredentialsError,
     has_app_credentials,
-    load_app_credentials,
 )
 
 
@@ -140,13 +138,15 @@ GENERAL_FIELDS: list[tuple] = [
 ]
 
 PER_ENV_FIELDS: list[tuple] = [
-    ("__section__", "Tradovate account",       "section",  None, None),
-    ("TRADOVATE_USERNAME",    "Username",       "text",     "", None),
-    ("TRADOVATE_PASSWORD",    "Password",       "password", "", None),
-    ("TRADOVATE_ACCOUNT_ID",  "Account ID",     "account_picker", "",
-        "Use 'Sign in & pick account' to fetch the list from "
-        "Tradovate — picks the LEADER account for this engine."),
-
+    # NOTE: the "Tradovate account" section (TRADOVATE_USERNAME /
+    # PASSWORD / ACCOUNT_ID + the "Sign in & pick account" picker) used
+    # to live here. It was removed: the user writes those three values by
+    # hand into .env.live / .env.demo, EnvStore preserves them verbatim
+    # (they're no longer in PER_ENV_KEYS), and config.py reads them from
+    # the environment. ACCOUNT_ID accepts the numeric id OR the account
+    # name (e.g. DEMO3701228); the engine resolves a name to the internal
+    # id via Tradovate's /account/list at startup, so the old GUI picker
+    # is no longer needed.
     ("__section__", "Proxy",                   "section",  None, None),
     ("PROXY_LISTEN_PORT", "Listen port", "text", "",
         "Point TradingView's --proxy-server flag at this port to feed "
@@ -540,23 +540,6 @@ class TradeSyncApp:
                 w = ttk.Entry(inner, textvariable=var, show="•")
                 w.grid(row=row, column=1, sticky="ew", pady=4)
                 var.trace_add("write", lambda *_a: self._on_widget_change())
-            elif kind == "account_picker":
-                # Entry + adjacent button that opens the Tradovate
-                # account picker dialog. Only available in per-env
-                # tabs (env is set), since the dialog needs a target.
-                var = tk.StringVar(value=actual_default)
-                picker_frame = ttk.Frame(inner)
-                picker_frame.grid(row=row, column=1, sticky="ew", pady=4)
-                picker_frame.columnconfigure(0, weight=1)
-                entry = ttk.Entry(picker_frame, textvariable=var)
-                entry.grid(row=0, column=0, sticky="ew")
-                var.trace_add("write", lambda *_a: self._on_widget_change())
-                if env:
-                    btn = ttk.Button(
-                        picker_frame, text="Sign in & pick account",
-                        command=lambda e=env: self._open_account_picker(e),
-                    )
-                    btn.grid(row=0, column=1, sticky="e", padx=(8, 0))
             else:
                 var = tk.StringVar(value=actual_default)
                 w = ttk.Entry(inner, textvariable=var)
@@ -1093,51 +1076,6 @@ class TradeSyncApp:
             # need to pack the parent again — the coloured child is
             # what shows up.
 
-    def _open_account_picker(self, env: str) -> None:
-        """
-        Open the 'Sign in & pick account' dialog for `env`. Reads
-        username/password from the form, authenticates against
-        Tradovate, lists the user's accounts (including any prop-firm
-        sub-accounts), lets the user pick one, and saves the chosen
-        numeric id into TRADOVATE_ACCOUNT_ID.
-
-        Networking runs on a worker thread so the GUI never freezes;
-        all widget updates are marshalled back via root.after().
-        """
-        # Make sure we have app credentials first.
-        try:
-            load_app_credentials()
-        except MissingAppCredentialsError as e:
-            messagebox.showerror("App credentials missing", str(e))
-            return
-
-        # Flush any pending typed-but-not-saved values to the store
-        # so we use what the user is looking at.
-        self._flush_widgets_to_store()
-
-        username = self.store.per_env[env].get("TRADOVATE_USERNAME", "").strip()
-        password = self.store.per_env[env].get("TRADOVATE_PASSWORD", "")
-        if not username or not password:
-            messagebox.showerror(
-                "Missing credentials",
-                f"Fill in {env.upper()}'s Tradovate username and "
-                f"password first, then click 'Sign in & pick account'.",
-            )
-            return
-
-        _AccountPickerDialog(
-            parent=self.root, env=env,
-            username=username, password=password,
-            on_selected=lambda acct_id: self._apply_picked_account(env, acct_id),
-        )
-
-    def _apply_picked_account(self, env: str, account_id: int) -> None:
-        """Write the selected account_id back into the form (which
-        also marks the env dirty for the next Save)."""
-        var = self.env_widgets[env].get("TRADOVATE_ACCOUNT_ID")
-        if var is not None:
-            var.set(str(account_id))
-
     # ── log streaming ─────────────────────────────────────────────── #
 
     def _drain_log(self):
@@ -1228,207 +1166,6 @@ class TradeSyncApp:
 
     def run(self):
         self.root.mainloop()
-
-
-# ─────────────────────────────────────────────────────────────────────── #
-#  Account picker dialog                                                  #
-# ─────────────────────────────────────────────────────────────────────── #
-
-class _AccountPickerDialog:
-    """
-    Modal Toplevel that authenticates with Tradovate (on a worker
-    thread, so the GUI never blocks), fetches /account/list, and
-    lets the user choose which numeric account id to pin as the
-    LEADER for this engine.
-
-    The two callbacks travel separately:
-      • on_selected(account_id: int) is invoked iff the user
-        confirms a selection
-      • dismissing the dialog (Cancel button, X, Esc) just closes,
-        the form's TRADOVATE_ACCOUNT_ID stays as it was.
-
-    Auth happens with the APP cid/sec (loaded from
-    tradesync/_app_credentials.py) and the per-env username/password
-    handed in by the caller.
-    """
-
-    def __init__(self, *, parent, env, username, password, on_selected):
-        self._on_selected = on_selected
-        self._env = env
-        self._accounts: list[dict] = []
-
-        self.top = tk.Toplevel(parent)
-        self.top.title(f"Sign in & pick {env.upper()} account")
-        self.top.transient(parent)
-        self.top.geometry("520x360")
-        self.top.minsize(420, 320)
-        self.top.bind("<Escape>", lambda _e: self._close())
-
-        body = ttk.Frame(self.top, padding=14)
-        body.pack(fill="both", expand=True)
-        ttk.Label(
-            body, font=("Helvetica", 13, "bold"),
-            text=f"Tradovate {env.upper()} — pick a LEADER account",
-        ).pack(anchor="w")
-        ttk.Label(
-            body, foreground="#5f6368", wraplength=470, justify="left",
-            text=(
-                f"Signing in as {username!r} to "
-                f"{'demo' if env == 'demo' else 'live'}.tradovateapi.com…"
-            ),
-        ).pack(anchor="w", pady=(2, 8))
-
-        self.status = ttk.Label(body, text="⏳  Connecting…",
-                                foreground="#5f6368")
-        self.status.pack(anchor="w", pady=(0, 8))
-
-        list_frame = ttk.Frame(body)
-        list_frame.pack(fill="both", expand=True)
-        self.listbox = tk.Listbox(list_frame, activestyle="dotbox", height=8)
-        self.listbox.pack(side="left", fill="both", expand=True)
-        sb = ttk.Scrollbar(list_frame, orient="vertical",
-                           command=self.listbox.yview)
-        sb.pack(side="right", fill="y")
-        self.listbox.configure(yscrollcommand=sb.set)
-        self.listbox.bind("<Double-Button-1>", lambda _e: self._confirm())
-
-        button_row = ttk.Frame(body)
-        button_row.pack(fill="x", pady=(10, 0))
-        ttk.Button(button_row, text="Cancel",
-                   command=self._close).pack(side="right")
-        self.ok_btn = ttk.Button(button_row, text="Use selected account",
-                                 command=self._confirm, state="disabled")
-        self.ok_btn.pack(side="right", padx=(0, 6))
-
-        self.top.grab_set()
-        self.top.focus_set()
-
-        # Kick off the network work on a daemon thread; populate the
-        # listbox via root.after when the thread reports back.
-        threading.Thread(
-            target=self._worker, args=(username, password, env),
-            daemon=True, name=f"acct-picker-{env}",
-        ).start()
-
-    # ── worker thread ──────────────────────────────────────────────── #
-
-    def _worker(self, username: str, password: str, env: str) -> None:
-        # Imports kept local so this module stays importable even
-        # when `requests` is unavailable on PYTHONPATH (e.g. during
-        # unit-test discovery without the project's venv active).
-        from ..brokers.tradovate import TradovateAuthError, TradovateClient
-
-        try:
-            cid, sec = load_app_credentials()
-        except MissingAppCredentialsError as e:
-            self.top.after(0, self._report_error, "App credentials missing", str(e))
-            return
-
-        api_url = (
-            "https://demo.tradovateapi.com/v1" if env == "demo"
-            else "https://live.tradovateapi.com/v1"
-        )
-        client = TradovateClient(
-            api_url=api_url,
-            username=username, password=password,
-            app_id="TradeSynchronizer", app_version="1.0",
-            cid=cid, sec=sec,
-            pinned_account_id=None,   # we DON'T want connect() to settle on one
-        )
-        try:
-            client.connect()
-            accounts = client.list_accounts()
-        except TradovateAuthError as e:
-            self.top.after(0, self._report_error,
-                           "Authentication failed", str(e))
-            return
-        except Exception as e:
-            self.top.after(0, self._report_error,
-                           "Connection error", f"{type(e).__name__}: {e}")
-            return
-
-        self.top.after(0, self._populate_accounts, accounts)
-
-    # ── main-thread callbacks ──────────────────────────────────────── #
-
-    def _populate_accounts(self, accounts: list) -> None:
-        self._accounts = accounts or []
-        if not self._accounts:
-            self._report_error(
-                "No accounts",
-                "Tradovate authenticated successfully but returned no "
-                "accounts. If you trade with a prop firm, make sure the "
-                "username / password belong to the Tradovate sub-account "
-                "they provisioned for you (not the prop firm's portal).",
-            )
-            return
-        self.status.configure(
-            text=f"✓  Authenticated — {len(self._accounts)} "
-                 f"account{'s' if len(self._accounts) != 1 else ''} found. "
-                 f"Select one and click 'Use selected account'.",
-            foreground="#1e8e3e",
-        )
-        for acc in self._accounts:
-            self.listbox.insert("end", self._format_account(acc))
-        self.listbox.bind("<<ListboxSelect>>", self._on_select)
-        self.listbox.selection_set(0)
-        self.listbox.activate(0)
-        self._on_select()
-
-    def _on_select(self, *_e) -> None:
-        sel = self.listbox.curselection()
-        if sel:
-            self.ok_btn.configure(state="normal")
-        else:
-            self.ok_btn.configure(state="disabled")
-
-    @staticmethod
-    def _format_account(acc: dict) -> str:
-        # Human-readable one-liner with the most useful fields. The
-        # raw dict has lots more (margin info, archived flag, etc.) —
-        # we keep this readable in a Listbox.
-        name = acc.get("name") or acc.get("accountSpec") or "(no name)"
-        acc_id = acc.get("id")
-        a_type = acc.get("accountType") or ""
-        legal  = acc.get("legalStatus") or ""
-        status = acc.get("active")
-        bits = [f"#{acc_id}  {name}"]
-        meta = " · ".join(x for x in (a_type, legal) if x)
-        if meta:
-            bits.append(f"  ({meta})")
-        if status is False:
-            bits.append("  [inactive]")
-        return "".join(bits)
-
-    def _confirm(self) -> None:
-        sel = self.listbox.curselection()
-        if not sel:
-            return
-        acc = self._accounts[sel[0]]
-        try:
-            account_id = int(acc["id"])
-        except (TypeError, ValueError, KeyError):
-            messagebox.showerror(
-                "Bad account record",
-                f"The selected account has no usable integer id: {acc!r}",
-                parent=self.top,
-            )
-            return
-        self._on_selected(account_id)
-        self._close()
-
-    def _report_error(self, title: str, message: str) -> None:
-        self.status.configure(text=f"❌  {title}", foreground="#d93025")
-        messagebox.showerror(title, message, parent=self.top)
-        # Leave the dialog up so the user can re-read the message;
-        # they close it manually with Cancel.
-
-    def _close(self) -> None:
-        try:
-            self.top.grab_release()
-        except tk.TclError:
-            pass
-        self.top.destroy()
 
 
 # ─────────────────────────────────────────────────────────────────────── #

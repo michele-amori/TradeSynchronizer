@@ -100,7 +100,7 @@ class TradovateClient:
         app_version: str,
         cid: str,
         sec: str,
-        pinned_account_id: Optional[int] = None,
+        pinned_account_id: "str | int | None" = None,
         device_id: Optional[str] = None,
         is_automated: bool = False,
     ):
@@ -295,15 +295,18 @@ class TradovateClient:
             logger.info("Resolved Tradovate accountId=%s from /account/list",
                         self._account_id)
 
-    def _resolve_pinned_account(self, accounts: list, pin: int) -> int:
+    def _resolve_pinned_account(self, accounts: list,
+                                pin: "str | int") -> int:
         """
         Translate a user-supplied pin to Tradovate's internal numeric
         `id`. Accepts EITHER:
           * the real numeric `id`  (e.g. 49000001 → returns 49000001), OR
-          * the human-readable `name` from the Tradovate UI
-            (typically a prop-firm-assigned account number, e.g. the
-            string "19000001" stored as int 19000001 → finds the
-            account with name="19000001" and returns its real id).
+          * the human-readable `name` from the Tradovate UI — numeric
+            (e.g. "19000001") OR alphanumeric (e.g. "DEMO3701228"). The
+            pin arrives as an int when it looked numeric and as a str
+            otherwise; either way the name match below compares against
+            str(pin), and the id match is a plain equality that simply
+            doesn't fire for a non-numeric pin.
 
         The Tradovate UI shows users their `name`, not their `id`,
         so most operators reach for the value they see when filling

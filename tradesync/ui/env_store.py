@@ -250,18 +250,25 @@ class EnvStore:
             "# Shared settings (proxy host, replication, logging) live in .env.",
             "",
             "# ── Tradovate (LEADER account) credentials ─────────────────────── #",
-            f"TRADOVATE_USERNAME={p.get('TRADOVATE_USERNAME', '')}",
-            f"TRADOVATE_PASSWORD={p.get('TRADOVATE_PASSWORD', '')}",
-            f"TRADOVATE_ACCOUNT_ID={p.get('TRADOVATE_ACCOUNT_ID', '')}",
+            "# TRADOVATE_USERNAME / TRADOVATE_PASSWORD / TRADOVATE_ACCOUNT_ID are",
+            "# written here BY HAND — the GUI no longer manages them. The engine",
+            "# reads them from this file at startup. ACCOUNT_ID may be the numeric",
+            "# id OR the account name you see in Tradovate (e.g. DEMO3701228); the",
+            "# engine resolves the name to the internal id via /account/list.",
+            "# They are preserved verbatim across GUI Saves (see _build_env docs).",
             "",
             "# ── Proxy listen port ──────────────────────────────────────────── #",
             f"PROXY_LISTEN_PORT={p.get('PROXY_LISTEN_PORT', default_port)}",
         ]
         # Preserve any extra keys the user added manually to this env
-        # file (e.g. TRADOVATE_CID/SEC/APP_ID/APP_VERSION/DEVICE_ID
-        # used as per-env overrides for an app registration that's
-        # scoped to LIVE or DEMO separately). Re-emitted by sorted
-        # name for stable diffs.
+        # file. This now INCLUDES the hand-written Tradovate credentials
+        # (TRADOVATE_USERNAME / TRADOVATE_PASSWORD / TRADOVATE_ACCOUNT_ID)
+        # since they were dropped from PER_ENV_KEYS and the canonical
+        # emit list above — they round-trip through extras_per_env and
+        # are re-emitted here unchanged, so a GUI Save never clobbers the
+        # values the user typed by hand. Also covers per-env overrides
+        # like TRADOVATE_CID/SEC/APP_ID/APP_VERSION/DEVICE_ID. Re-emitted
+        # by sorted name for stable diffs.
         extras = self.extras_per_env.get(env, {})
         if extras:
             lines.append("")

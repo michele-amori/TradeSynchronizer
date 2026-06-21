@@ -14,17 +14,24 @@ from __future__ import annotations
 
 ENVIRONMENTS = ("live", "demo")
 
-# Keys whose values differ between LIVE and DEMO. Everything else in
-# the settings file is shared across both engines.
+# Keys whose values differ between LIVE and DEMO AND are still managed
+# by the GUI form. Everything else in the env files is either shared
+# across both engines or preserved verbatim as an "extra".
 #
-# Note: TRADOVATE_CID and TRADOVATE_SEC USED to be per-env but are
+# Note 1: TRADOVATE_CID and TRADOVATE_SEC USED to be per-env but are
 # now app-level (loaded from tradesync/_app_credentials.py, which
 # is gitignored). They no longer appear in .env.live / .env.demo
 # nor in the GUI form.
+#
+# Note 2: TRADOVATE_USERNAME / TRADOVATE_PASSWORD / TRADOVATE_ACCOUNT_ID
+# USED to be here too, edited from the per-env tabs. They were removed
+# from the GUI: the user now writes them by hand into .env.live /
+# .env.demo. Crucially they are NOT listed here anymore, so EnvStore
+# treats them as preserved "extras" (extras_per_env) instead of
+# canonical keys — a GUI Save re-emits them verbatim rather than
+# overwriting the hand-written values. The engine reads them straight
+# from the environment in config.py, unchanged.
 PER_ENV_KEYS = frozenset({
-    "TRADOVATE_USERNAME",
-    "TRADOVATE_PASSWORD",
-    "TRADOVATE_ACCOUNT_ID",
     "PROXY_LISTEN_PORT",
 })
 

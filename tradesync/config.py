@@ -203,7 +203,7 @@ class Config:
     tradovate_cid:       str
     tradovate_sec:       str
     tradovate_env:       str     # 'demo' | 'live'
-    tradovate_acct_id:   int | None   # optional pin
+    tradovate_acct_id:   str | int | None   # optional pin (numeric id or name)
 
     # ── Proxy ────────────────────────────────────────────────────── #
     proxy_host:  str
@@ -320,55 +320,26 @@ class Config:
         # Also allowed to be empty — same shadow-mode story.
         cid, sec = load_app_credentials_or_empty()
 
-        # TRADOVATE_ACCOUNT_ID is expected to be the NUMERIC Tradovate
-        # account id (e.g. 12345678) obtained from
-        # "Sign in & pick account" in the GUI — NOT the alphanumeric
-        # nickname some prop firms (Apex / TopStep / BlueGuardian etc.)
-        # expose as the public-facing account name. If a non-integer
-        # value is found here:
-        #   * In shadow mode: warn and treat it as unset. The shadow
-        #     TradovateClient never uses the real account id anyway
-        #     (returns 999_999 as a placeholder), so the user can
-        #     still boot and validate the IBKR-side interception
-        #     while they sort out the right value.
-        #   * Out of shadow mode: raise a clear error pointing at the
-        #     misconfiguration, so the user understands the
-        #     "Sign in & pick account" workflow.
+        # TRADOVATE_ACCOUNT_ID is the LEADER account to trade. The user
+        # writes it by hand into .env.<env> and may use EITHER form:
+        #   - the internal NUMERIC id (e.g. 12345678), or
+        #   - the human-readable account NAME shown in the Tradovate UI
+        #     (e.g. "DEMO3701228", or a prop-firm number like "19000001").
+        # We do NOT resolve or validate it here: the raw value is handed
+        # to TradovateClient, which hits /account/list at connect() and
+        # resolves a name to its internal id (see _resolve_pinned_account).
+        # An int-looking value is normalised to int so the numeric path is
+        # byte-for-byte unchanged; anything else passes through as the
+        # stripped string. Blank stays None (no pin).
         acct_id_raw = (os.getenv("TRADOVATE_ACCOUNT_ID") or "").strip()
-        acct_id: Optional[int]
+        acct_id: "str | int | None"
         if not acct_id_raw:
             acct_id = None
         else:
             try:
                 acct_id = int(acct_id_raw)
             except ValueError:
-                shadow_now = not all((
-                    cid, sec,
-                    os.getenv("TRADOVATE_USERNAME") or "",
-                    os.getenv("TRADOVATE_PASSWORD") or "",
-                ))
-                if shadow_now:
-                    logger.warning(
-                        "TRADOVATE_ACCOUNT_ID=%r is not a numeric id "
-                        "— ignoring (shadow mode). The numeric id is "
-                        "the one returned by Tradovate's /account/list "
-                        "endpoint, e.g. 12345678. Prop-firm nicknames "
-                        "like 'APEX-12345' or 'BGF46274' go in "
-                        "TRADOVATE_USERNAME instead, NOT here. Once "
-                        "credentials are configured, use the GUI's "
-                        "'Sign in & pick account' to populate this "
-                        "field with the right value.", acct_id_raw)
-                    acct_id = None
-                else:
-                    raise RuntimeError(
-                        f"TRADOVATE_ACCOUNT_ID={acct_id_raw!r} is not a "
-                        f"valid integer. This field expects the NUMERIC "
-                        f"Tradovate account id (e.g. 12345678), not the "
-                        f"alphanumeric nickname your prop firm shows you. "
-                        f"Open the GUI, go to the {env.capitalize()} "
-                        f"tab, click 'Sign in & pick account' and let "
-                        f"it auto-fill the right value."
-                    )
+                acct_id = acct_id_raw
 
         verbose_raw = (os.getenv("VERBOSE_TROUBLESHOOTING") or "true").lower()
         verbose = verbose_raw in ("1", "true", "yes", "on")

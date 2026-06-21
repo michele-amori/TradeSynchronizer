@@ -279,24 +279,30 @@ Three dotenv files at the project root, all gitignored:
 - **`.env`** — settings shared by every engine: `TRADOVATE_APP_ID`,
   `TRADOVATE_APP_VERSION`, `TRADOVATE_IS_AUTOMATED`,
   `PROXY_LISTEN_HOST`, `LOG_LEVEL`, `LOG_FILE`.
-- **`.env.live`** — LIVE engine private settings: `TRADOVATE_USERNAME`,
-  `TRADOVATE_PASSWORD`, `TRADOVATE_ACCOUNT_ID`, `PROXY_LISTEN_PORT`
-  (default `8080`). The IBKR source-account filter is no longer set
-  here — it's driven by the **Replication** tab's pairs (see below);
-  `IBKR_WATCHED_ACCOUNTS` is still honoured as a fallback if present.
+- **`.env.live`** — LIVE engine private settings. `TRADOVATE_USERNAME`,
+  `TRADOVATE_PASSWORD`, `TRADOVATE_ACCOUNT_ID` are written by hand (the
+  GUI manages only `PROXY_LISTEN_PORT`, default `8080`, here). The GUI
+  preserves the hand-written credentials verbatim across Saves. The IBKR
+  source-account filter is no longer set here — it's driven by the
+  **Replication** tab's pairs (see below); `IBKR_WATCHED_ACCOUNTS` is
+  still honoured as a fallback if present.
 - **`.env.demo`** — DEMO engine private settings: same key set as
   `.env.live`, but for the paper / second account. Default port
   `8081` so DEMO can run alongside LIVE.
 
-The easiest workflow:
-1. Launch `TradeSynchronizer.app`.
-2. In the Live (or Demo) tab, fill *Username* and *Password*.
-3. Click **Sign in & pick account**. The dialog authenticates with
-   Tradovate, lists every account visible to the user (including
-   any prop-firm sub-accounts), and lets you pick which one to
-   pin as this engine's LEADER. The picked numeric id lands in the
-   Account ID field automatically.
-4. Save. Done.
+The Tradovate credentials are written by hand:
+1. Open `.env.live` (or `.env.demo`) in an editor.
+2. Set `TRADOVATE_USERNAME`, `TRADOVATE_PASSWORD`, and
+   `TRADOVATE_ACCOUNT_ID`. For the account id you may use EITHER the
+   internal numeric id OR the account name you see in the Tradovate UI
+   (numeric like `19000001`, or alphanumeric like `DEMO3701228`) — the
+   engine resolves a name to the internal id at startup via
+   `/account/list`.
+3. Save the file. The engine reads these values on its next start.
+
+(The GUI no longer edits these three fields, and the old "Sign in &
+pick account" picker has been removed — name resolution that the picker
+used to do now happens automatically in the engine at connect.)
 
 Each engine subprocess loads `.env` first and then its env-specific
 file at startup; modifying the DEMO config has zero effect on a

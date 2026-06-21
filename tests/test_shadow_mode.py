@@ -219,15 +219,15 @@ class TestConfigShadowProperty(unittest.TestCase):
 
 
 class TestNonNumericAccountIdHandling(unittest.TestCase):
-    """A user filling TRADOVATE_ACCOUNT_ID with a prop-firm nickname
-    (e.g. 'BGF46274' instead of 12345678) used to crash Config.load()
-    with a bare ValueError before the engine could even reach its
-    log setup. This regression test guarantees the resilient parse.
-
-    In shadow mode it's logged + dropped silently (None), so the user
-    can still validate IBKR interception without sorting out the
-    numeric id first. Out of shadow it raises a clear RuntimeError
-    that points at the GUI's 'Sign in & pick account' workflow."""
+    """TRADOVATE_ACCOUNT_ID may be the numeric id OR the account NAME
+    shown in the Tradovate UI (numeric like '19000001' or alphanumeric
+    like 'DEMO3701228'). Config.load() no longer forces int(): an
+    int-looking value is normalised to int (numeric path unchanged),
+    and anything else is passed through verbatim as a string. The
+    engine resolves a name to the internal id via /account/list at
+    connect() (see TestResolvePinnedAccount). This replaces the old
+    behaviour where a non-numeric value was dropped in shadow mode and
+    raised a RuntimeError out of shadow."""
 
     def _load(self, env_overrides):
         """Run Config.load() with a controlled environment. Builds
@@ -250,16 +250,28 @@ class TestNonNumericAccountIdHandling(unittest.TestCase):
                  patch("tradesync.config.PROJECT_ROOT", Path(tmp)):
                 return Config.load()
 
-    def test_non_numeric_acct_id_silently_dropped_in_shadow(self):
-        # Empty user creds → shadow mode
+    def test_alphanumeric_acct_id_preserved_as_string(self):
+        # An alphanumeric account NAME is now kept verbatim (as a str)
+        # so connect() can resolve it via /account/list — not dropped.
         cfg = self._load({
             "TRADOVATE_USERNAME": "",
             "TRADOVATE_PASSWORD": "",
-            "TRADOVATE_ACCOUNT_ID": "BGF46274",
+            "TRADOVATE_ACCOUNT_ID": "DEMO3701228",
         })
         self.assertTrue(cfg.is_shadow_mode)
-        # The bad value got dropped, not propagated
-        self.assertIsNone(cfg.tradovate_acct_id)
+        self.assertEqual(cfg.tradovate_acct_id, "DEMO3701228")
+
+    def test_non_numeric_acct_id_not_raised_out_of_shadow(self):
+        # Out of shadow (all creds present) an alphanumeric name must
+        # NOT raise anymore — it's a valid name to be resolved later.
+        cfg = self._load({
+            "TRADOVATE_USERNAME": "user",
+            "TRADOVATE_PASSWORD": "pass",
+            "TRADOVATE_CID": "cid",
+            "TRADOVATE_SEC": "sec",
+            "TRADOVATE_ACCOUNT_ID": "DEMO3701228",
+        })
+        self.assertEqual(cfg.tradovate_acct_id, "DEMO3701228")
 
     def test_numeric_acct_id_works_in_shadow(self):
         cfg = self._load({
@@ -329,6 +341,26 @@ class TestResolvePinnedAccount(unittest.TestCase):
             c._resolve_pinned_account(self._ACCOUNTS, pin=19000001),
             49000001,
         )
+
+    def test_pin_matches_alphanumeric_name(self):
+        # The user's real case: an alphanumeric account name like a
+        # Tradovate demo id (DEMO3701228). It arrives as a STRING (it
+        # didn't look int-like in config.py), and must resolve to the
+        # internal numeric id via the name match.
+        accounts = [
+            {"id": 49000123, "name": "DEMO3701228", "userId": 3701228},
+        ]
+        c = self._client()
+        self.assertEqual(
+            c._resolve_pinned_account(accounts, pin="DEMO3701228"),
+            49000123,
+        )
+
+    def test_alphanumeric_pin_without_match_raises(self):
+        from tradesync.brokers.tradovate import TradovateAuthError
+        c = self._client()
+        with self.assertRaises(TradovateAuthError):
+            c._resolve_pinned_account(self._ACCOUNTS, pin="NOPE9999")
 
     def test_id_match_wins_over_name_match(self):
         # Synthetic but possible: account A's id equals account B's

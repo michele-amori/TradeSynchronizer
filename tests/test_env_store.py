@@ -78,18 +78,23 @@ class TestEnvStoreLoad(unittest.TestCase):
             self.assertEqual(s.shared["PROXY_LISTEN_HOST"], "127.0.0.1")
             self.assertEqual(s.shared["TRADOVATE_APP_ID"], "TradeSynchronizer")
             self.assertEqual(s.shared["LOG_LEVEL"], "INFO")
-            # Per-env keys land only in per_env[<env>]
-            self.assertEqual(s.per_env["live"]["TRADOVATE_USERNAME"], "u_live")
+            # PROXY_LISTEN_PORT is the one canonical per-env key left.
             self.assertEqual(s.per_env["live"]["PROXY_LISTEN_PORT"], "8080")
-            # IBKR_WATCHED_ACCOUNTS is no longer a managed per-env field
-            # (it moved to the Replication tab / pair model). A legacy
-            # value in an existing env file is preserved as an "extra"
-            # so the next Save doesn't silently drop it.
+            self.assertEqual(s.per_env["demo"]["PROXY_LISTEN_PORT"], "8081")
+            # TRADOVATE_USERNAME/PASSWORD/ACCOUNT_ID are no longer managed
+            # per-env keys (the GUI dropped them — hand-edited in .env).
+            # A value in the file is preserved as a per-env "extra".
+            self.assertNotIn("TRADOVATE_USERNAME", s.per_env["live"])
+            self.assertEqual(
+                s.extras_per_env["live"]["TRADOVATE_USERNAME"], "u_live")
+            self.assertEqual(
+                s.extras_per_env["live"]["TRADOVATE_PASSWORD"], "p_live")
+            self.assertEqual(
+                s.extras_per_env["demo"]["TRADOVATE_USERNAME"], "u_demo")
+            # IBKR_WATCHED_ACCOUNTS is likewise preserved as an extra.
             self.assertNotIn("IBKR_WATCHED_ACCOUNTS", s.per_env["live"])
             self.assertEqual(
                 s.extras_per_env["live"]["IBKR_WATCHED_ACCOUNTS"], "U0000001")
-            self.assertEqual(s.per_env["demo"]["TRADOVATE_USERNAME"], "u_demo")
-            self.assertEqual(s.per_env["demo"]["PROXY_LISTEN_PORT"], "8081")
             # No cross-contamination
             self.assertNotIn("PROXY_LISTEN_PORT", s.shared)
             self.assertNotIn("TRADOVATE_APP_ID", s.per_env["live"])
@@ -106,7 +111,10 @@ class TestEnvStoreLoad(unittest.TestCase):
         )
         with _TmpEnv(live_text=live) as s:
             s.load()
-            self.assertEqual(s.per_env["live"]["TRADOVATE_USERNAME"], "u_live")
+            self.assertEqual(s.per_env["live"]["PROXY_LISTEN_PORT"], "8080")
+            # Hand-edited Tradovate creds are preserved as extras.
+            self.assertEqual(
+                s.extras_per_env["live"]["TRADOVATE_USERNAME"], "u_live")
             # Stray shared keys migrate to self.shared
             self.assertEqual(s.shared["PROXY_LISTEN_HOST"], "10.0.0.5")
 
@@ -120,11 +128,13 @@ class TestEnvStoreLoad(unittest.TestCase):
             self.assertEqual(s.shared["PROXY_LISTEN_HOST"], "127.0.0.1")
 
     def test_in_file_tradovate_environment_is_ignored(self):
-        live = "TRADOVATE_ENVIRONMENT=demo\nTRADOVATE_USERNAME=u_live\n"
+        live = "TRADOVATE_ENVIRONMENT=demo\nPROXY_LISTEN_PORT=8080\n"
         with _TmpEnv(live_text=live) as s:
             s.load()
-            self.assertEqual(s.per_env["live"]["TRADOVATE_USERNAME"], "u_live")
+            self.assertEqual(s.per_env["live"]["PROXY_LISTEN_PORT"], "8080")
             self.assertNotIn("TRADOVATE_ENVIRONMENT", s.shared)
+            self.assertNotIn("TRADOVATE_ENVIRONMENT", s.per_env["live"])
+            self.assertNotIn("TRADOVATE_ENVIRONMENT", s.extras_per_env["live"])
 
 
 class TestEnvStoreGetSet(unittest.TestCase):
@@ -132,18 +142,18 @@ class TestEnvStoreGetSet(unittest.TestCase):
     def test_get_env_per_env(self):
         with _TmpEnv() as s:
             s.load()
-            s.per_env["live"]["TRADOVATE_USERNAME"] = "live_u"
-            s.per_env["demo"]["TRADOVATE_USERNAME"] = "demo_u"
-            self.assertEqual(s.get_env("live", "TRADOVATE_USERNAME"), "live_u")
-            self.assertEqual(s.get_env("demo", "TRADOVATE_USERNAME"), "demo_u")
+            s.per_env["live"]["PROXY_LISTEN_PORT"] = "8080"
+            s.per_env["demo"]["PROXY_LISTEN_PORT"] = "8081"
+            self.assertEqual(s.get_env("live", "PROXY_LISTEN_PORT"), "8080")
+            self.assertEqual(s.get_env("demo", "PROXY_LISTEN_PORT"), "8081")
 
     def test_set_env_per_env(self):
         with _TmpEnv() as s:
             s.load()
-            s.set_env("live", "TRADOVATE_USERNAME", "live_u")
-            s.set_env("demo", "TRADOVATE_USERNAME", "demo_u")
-            self.assertEqual(s.per_env["live"]["TRADOVATE_USERNAME"], "live_u")
-            self.assertEqual(s.per_env["demo"]["TRADOVATE_USERNAME"], "demo_u")
+            s.set_env("live", "PROXY_LISTEN_PORT", "8080")
+            s.set_env("demo", "PROXY_LISTEN_PORT", "8081")
+            self.assertEqual(s.per_env["live"]["PROXY_LISTEN_PORT"], "8080")
+            self.assertEqual(s.per_env["demo"]["PROXY_LISTEN_PORT"], "8081")
 
     def test_set_shared_via_env_helper(self):
         with _TmpEnv() as s:
@@ -160,19 +170,22 @@ class TestEnvStoreWrite(unittest.TestCase):
     def _populate(self, s: EnvStore):
         # Note: TRADOVATE_CID/_SEC are intentionally absent — they
         # moved to tradesync/_app_credentials.py at app level.
-        s.per_env["live"] = {
+        # PROXY_LISTEN_PORT is the one canonical per-env key. The
+        # Tradovate credentials + IBKR watchlist are hand-edited values
+        # the GUI no longer manages, so they live in extras_per_env and
+        # round-trip through there.
+        s.per_env["live"] = {"PROXY_LISTEN_PORT": "8080"}
+        s.per_env["demo"] = {"PROXY_LISTEN_PORT": "8081"}
+        s.extras_per_env["live"] = {
             "TRADOVATE_USERNAME": "u_live",
             "TRADOVATE_PASSWORD": "p_live",
             "TRADOVATE_ACCOUNT_ID": "9000001",
             "IBKR_WATCHED_ACCOUNTS": "U0000001",
-            "PROXY_LISTEN_PORT": "8080",
         }
-        s.per_env["demo"] = {
+        s.extras_per_env["demo"] = {
             "TRADOVATE_USERNAME": "u_demo",
             "TRADOVATE_PASSWORD": "p_demo",
-            "TRADOVATE_ACCOUNT_ID": "",
             "IBKR_WATCHED_ACCOUNTS": "DU9999999",
-            "PROXY_LISTEN_PORT": "8081",
         }
         s.shared.update({
             "TRADOVATE_APP_ID": "TradeSynchronizer",
@@ -192,8 +205,11 @@ class TestEnvStoreWrite(unittest.TestCase):
             # Reload from disk and verify everything survived
             s2 = EnvStore(project_root=s.shared_path.parent)
             s2.load()
-            self.assertEqual(s2.per_env["live"]["TRADOVATE_USERNAME"], "u_live")
-            self.assertEqual(s2.per_env["demo"]["TRADOVATE_USERNAME"], "u_demo")
+            # Tradovate creds round-trip through the preserved extras.
+            self.assertEqual(
+                s2.extras_per_env["live"]["TRADOVATE_USERNAME"], "u_live")
+            self.assertEqual(
+                s2.extras_per_env["demo"]["TRADOVATE_USERNAME"], "u_demo")
             self.assertEqual(s2.per_env["live"]["PROXY_LISTEN_PORT"], "8080")
             self.assertEqual(s2.per_env["demo"]["PROXY_LISTEN_PORT"], "8081")
             self.assertEqual(s2.shared["PROXY_LISTEN_HOST"], "127.0.0.1")
@@ -210,8 +226,8 @@ class TestEnvStoreWrite(unittest.TestCase):
             shared_before = s.shared_path.read_text()
 
             # Modify live IN MEMORY but write only demo
-            s.per_env["live"]["TRADOVATE_USERNAME"] = "MODIFIED_BUT_NOT_SAVED"
-            s.per_env["demo"]["TRADOVATE_USERNAME"] = "modified_demo"
+            s.extras_per_env["live"]["TRADOVATE_USERNAME"] = "MODIFIED_BUT_NOT_SAVED"
+            s.extras_per_env["demo"]["TRADOVATE_USERNAME"] = "modified_demo"
             written = s.write(only={"demo"})
 
             self.assertEqual([p.name for p in written], [".env.demo"])
@@ -219,7 +235,7 @@ class TestEnvStoreWrite(unittest.TestCase):
             self.assertEqual(s.env_paths["live"].read_text(), live_before)
             # shared file untouched
             self.assertEqual(s.shared_path.read_text(), shared_before)
-            # demo file actually has the new value
+            # demo file actually has the new value (preserved as an extra)
             self.assertIn("TRADOVATE_USERNAME=modified_demo",
                           s.env_paths["demo"].read_text())
 
@@ -253,9 +269,10 @@ class TestEnvStoreWrite(unittest.TestCase):
                 self.assertNotIn("PROXY_LISTEN_HOST=", content)
                 self.assertNotIn("LOG_LEVEL=", content)
                 self.assertNotIn("TRADOVATE_APP_ID=", content)
-                # Per-env keys MUST appear
-                self.assertIn("TRADOVATE_USERNAME=", content)
+                # The canonical per-env key MUST appear, and so must the
+                # hand-edited Tradovate creds (re-emitted as extras).
                 self.assertIn("PROXY_LISTEN_PORT=", content)
+                self.assertIn("TRADOVATE_USERNAME=", content)
 
     def test_shared_file_has_no_per_env_keys(self):
         with _TmpEnv() as s:
@@ -300,7 +317,7 @@ class TestSnapshotPerFile(unittest.TestCase):
         with _TmpEnv() as s:
             s.load()
             before = s.snapshot_per_file()
-            s.set_env("demo", "TRADOVATE_USERNAME", "x")
+            s.set_env("demo", "PROXY_LISTEN_PORT", "9999")
             after = s.snapshot_per_file()
             self.assertNotEqual(before["demo"], after["demo"])
             self.assertEqual(before["live"], after["live"])
@@ -451,8 +468,10 @@ class TestExtrasPreservedAcrossRoundTrip(unittest.TestCase):
                 s2.extras_per_env["live"]["TRADOVATE_DEVICE_ID"],
                 "118c31bf-6995-8263-af13-2159c369e239",
             )
-            # Sanity: canonical per-env keys still there too.
-            self.assertEqual(s2.per_env["live"]["TRADOVATE_USERNAME"], "u_live")
+            # Sanity: hand-edited creds (extras) + the canonical per-env
+            # key both survive.
+            self.assertEqual(
+                s2.extras_per_env["live"]["TRADOVATE_USERNAME"], "u_live")
             self.assertEqual(s2.per_env["live"]["PROXY_LISTEN_PORT"], "8080")
 
     def test_per_env_extras_stay_scoped_to_their_engine(self):
