@@ -236,6 +236,46 @@ class TestPlaceBracket(unittest.TestCase):
         # all three were placed
         self.assertEqual(len(c.placed), 3)
 
+    def test_oca_group_seed_makes_name_unique_per_follower(self):
+        # Regression: with several followers, each is a separate client
+        # whose ids restart from nextValidId, so without a seed the first
+        # bracket on every follower is "oca_<entry>" with the same entry
+        # id → collision → modify rejected with 10326. Seeding with the
+        # account id keeps the group name unique per follower.
+        c = _connected_client()
+        tp = self._o("SELL", "LMT", 2, lmtPrice=29292.0)
+        sl = self._o("SELL", "STP", 2, auxPrice=28942.0)
+        c.place_bracket(contract=Contract(), parent=self._o("BUY", "MKT", 2),
+                        children=[tp, sl], oca_group_seed="DU2967357")
+        self.assertEqual(tp.ocaGroup, sl.ocaGroup)
+        self.assertEqual(tp.ocaGroup, "oca_DU2967357_1000")
+
+    def test_two_followers_same_entry_id_get_distinct_oca_groups(self):
+        # Two fresh clients (followers) both start at nextValidId=1000;
+        # different seeds must yield different group names so IBKR sees
+        # them as unrelated OCA groups.
+        a = _connected_client()
+        b = _connected_client()
+        ta = self._o("SELL", "LMT", 1, lmtPrice=1.0)
+        sa = self._o("SELL", "STP", 1, auxPrice=2.0)
+        tb = self._o("SELL", "LMT", 1, lmtPrice=1.0)
+        sb = self._o("SELL", "STP", 1, auxPrice=2.0)
+        a.place_bracket(contract=Contract(), parent=self._o("BUY", "MKT", 1),
+                        children=[ta, sa], oca_group_seed="DUQ752730")
+        b.place_bracket(contract=Contract(), parent=self._o("BUY", "MKT", 1),
+                        children=[tb, sb], oca_group_seed="DU5915979")
+        self.assertNotEqual(ta.ocaGroup, tb.ocaGroup)
+
+    def test_seed_is_sanitised(self):
+        # A seed with spaces/odd chars is reduced to alnum/-/_ so the
+        # group name stays a clean token.
+        c = _connected_client()
+        tp = self._o("SELL", "LMT", 1, lmtPrice=1.0)
+        sl = self._o("SELL", "STP", 1, auxPrice=2.0)
+        c.place_bracket(contract=Contract(), parent=self._o("BUY", "MKT", 1),
+                        children=[tp, sl], oca_group_seed="A B/C*D")
+        self.assertEqual(tp.ocaGroup, "oca_ABCD_1000")
+
 
 class TestCancelModify(unittest.TestCase):
 

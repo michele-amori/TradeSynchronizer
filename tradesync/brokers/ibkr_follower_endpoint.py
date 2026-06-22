@@ -221,8 +221,14 @@ class IbkrFollowerEndpoint:
         self._stamp_account(parent)
         for _c in children:
             self._stamp_account(_c)
+        # Seed the OCA group name with THIS follower's account id, so two
+        # followers (each a separate client whose order ids restart from
+        # nextValidId on connect) can't both name their first bracket
+        # "oca_1" — a collision that makes IBKR reject any later leg
+        # modify with code 10326. See IbkrApiClient.place_bracket.
         entry_id, child_ids = self._client.place_bracket(
-            contract=resolved.contract, parent=parent, children=children)
+            contract=resolved.contract, parent=parent, children=children,
+            oca_group_seed=self._account_id)
         # Remember each leg for later modify.
         self._placed[str(entry_id)] = (resolved.contract, parent)
         for cid, child in zip(child_ids, children):

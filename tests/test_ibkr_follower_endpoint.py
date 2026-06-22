@@ -77,15 +77,22 @@ class FakeIbkrApiClient:
         self._next += 1
         return oid
 
-    def place_bracket(self, *, contract, parent, children):
+    def place_bracket(self, *, contract, parent, children,
+                      oca_group_seed=None):
         self.brackets.append((contract, parent, children))
+        self.last_oca_seed = oca_group_seed
         entry = self._next
         self._next += 1
         # Mirror IbkrApiClient.place_bracket: stamp the OCA group +
         # parentId onto each child Order in place (these are the very
         # objects the endpoint remembers for later modify, so the OCA
         # fields must be present for the modify-path test to be faithful).
-        oca_group = f"oca_{entry}"
+        # The group name is seeded with the follower's account id so two
+        # followers can't collide on "oca_<entry>" (see IbkrApiClient).
+        if oca_group_seed:
+            oca_group = f"oca_{oca_group_seed}_{entry}"
+        else:
+            oca_group = f"oca_{entry}"
         cids = []
         for child in children:
             child.parentId = entry
@@ -339,12 +346,58 @@ class TestCancelModifyStatus(unittest.TestCase):
         ep.modify_order(sl_id, ModifySpec(new_stop_price=88.0,
                                           order_type=OrderType.STOP))
         _oid, _contract, order = client.modified[-1]
-        # Every placement field is re-sent identically...
-        self.assertEqual(order.ocaGroup, "oca_%d" % entry_id)
+        # Every placement field is re-sent identically (the OCA group
+        # name is now seeded with the follower account id for uniqueness)...
+        self.assertEqual(order.ocaGroup, "oca_DU0000002_%d" % entry_id)
         self.assertEqual(order.ocaType, 1)
         self.assertEqual(order.parentId, entry_id)
         # ...with only the price changed.
         self.assertEqual(order.auxPrice, 88.0)
+
+    def test_bracket_seeds_oca_group_with_account_id(self):
+        # Regression (multi-follower): the endpoint must seed the OCA
+        # group name with its account id, so two followers don't both
+        # name their first bracket "oca_1" → 10326 on any later modify.
+        ep, client = _endpoint()      # account_id="DU0000002"
+        entry = OrderSpec(side=Side.BUY, quantity=1,
+                          order_type=OrderType.MARKET, role=BracketRole.ENTRY)
+        tp = OrderSpec(side=Side.SELL, quantity=1, order_type=OrderType.LIMIT,
+                       limit_price=10.0, role=BracketRole.TAKE_PROFIT)
+        sl = OrderSpec(side=Side.SELL, quantity=1, order_type=OrderType.STOP,
+                       stop_price=9.0, role=BracketRole.STOP_LOSS)
+        ep.place_bracket(BracketSpec(entry=entry, children=[tp, sl]),
+                         symbol="MNQM6")
+        self.assertEqual(client.last_oca_seed, "DU0000002")
+        _contract, _parent, children = client.brackets[0]
+        self.assertTrue(children[0].ocaGroup.startswith("oca_DU0000002_"))
+
+    def test_two_followers_get_distinct_oca_groups(self):
+        # The crux of the multi-follower fix: different account ids →
+        # different OCA group names even when entry ids collide.
+        client_a = FakeIbkrApiClient()
+        client_b = FakeIbkrApiClient()
+        ep_a = IbkrFollowerEndpoint(client_a, env="demo",
+                                    account_id="DUQ752730")
+        ep_b = IbkrFollowerEndpoint(client_b, env="demo",
+                                    account_id="DU5915979")
+
+        def _bracket():
+            entry = OrderSpec(side=Side.BUY, quantity=1,
+                              order_type=OrderType.MARKET,
+                              role=BracketRole.ENTRY)
+            tp = OrderSpec(side=Side.SELL, quantity=1,
+                           order_type=OrderType.LIMIT, limit_price=10.0,
+                           role=BracketRole.TAKE_PROFIT)
+            sl = OrderSpec(side=Side.SELL, quantity=1,
+                           order_type=OrderType.STOP, stop_price=9.0,
+                           role=BracketRole.STOP_LOSS)
+            return BracketSpec(entry=entry, children=[tp, sl])
+
+        ep_a.place_bracket(_bracket(), symbol="MNQM6")
+        ep_b.place_bracket(_bracket(), symbol="MNQM6")
+        group_a = client_a.brackets[0][2][0].ocaGroup
+        group_b = client_b.brackets[0][2][0].ocaGroup
+        self.assertNotEqual(group_a, group_b)
 
     def test_modify_single_order_has_no_oca_group(self):
         # A plain (non-bracket) order has no OCA group, and a modify must

@@ -472,7 +472,8 @@ class IbkrApiClient(EClient):
         return oid
 
     def place_bracket(self, *, contract: Contract, parent: Order,
-                      children: list) -> tuple:
+                      children: list, oca_group_seed: Optional[str] = None
+                      ) -> tuple:
         """Submit an entry order plus its OCO children as an IBKR
         bracket. Returns (entry_id, [child_id, ...]).
 
@@ -480,12 +481,32 @@ class IbkrApiClient(EClient):
         only the LAST order in the group has transmit=True so the whole
         group is sent atomically. The children are OCA-grouped so one
         fill cancels the siblings (native OCO — unlike Tradovate, IBKR
-        does this for us when ocaGroup is set)."""
+        does this for us when ocaGroup is set).
+
+        OCA group name uniqueness — IBKR requires OCA group names to be
+        globally unique. The entry id alone is NOT enough once there are
+        several followers: each follower is a SEPARATE client whose order
+        ids restart from nextValidId (=1) on every connect, so the first
+        bracket on every follower would otherwise be named "oca_1" — a
+        collision. Modifying a leg of a collided group is then rejected
+        with code 10326 "OCA group revision is not allowed", and the stop
+        never moves. Callers pass oca_group_seed (the follower's account
+        id) so the name is unique per follower: "oca_<seed>_<entry_id>".
+        With one follower this regression couldn't occur (a single id
+        stream gives globally unique names); it only appeared once a
+        second IBKR follower was added."""
         if not self.is_connected:
             raise IbkrNotConnected("place_bracket called while disconnected")
         entry_id = self._alloc_order_id()
         child_ids = [self._alloc_order_id() for _ in children]
-        oca_group = f"oca_{entry_id}"
+        if oca_group_seed:
+            # Sanitise the seed (account ids are already simple, but keep
+            # the group name free of spaces/control chars defensively).
+            safe = "".join(ch for ch in str(oca_group_seed)
+                           if ch.isalnum() or ch in ("-", "_"))
+            oca_group = f"oca_{safe}_{entry_id}"
+        else:
+            oca_group = f"oca_{entry_id}"
 
         # Entry: transmit=False so it's held until the children arrive.
         parent.orderId = entry_id
