@@ -313,10 +313,19 @@ class TestCancelModifyStatus(unittest.TestCase):
         client.statuses[555] = "Filled"
         self.assertEqual(ep.order_status("555"), "Filled")
 
-    def test_modify_bracket_leg_preserves_oca_group(self):
-        # Regression for the live `code=10327 OCA group type revision is
-        # not allowed` error: modifying a bracket exit leg must keep the
-        # leg in its OCA group, not re-place it with an empty group.
+    def test_modify_bracket_leg_strips_oca_group(self):
+        # Regression for the live OCA errors on a bracket-leg modify,
+        # both verified on paper with the stop price proven unchanged
+        # afterwards via reqAllOpenOrders:
+        #   * sending no OCA fields → code 10327 "OCA group type revision
+        #     is not allowed";
+        #   * re-sending ocaGroup+ocaType → code 10326 "OCA group revision
+        #     is not allowed", and the stop did NOT move.
+        # The fix: a modify re-places ONLY the changed economic fields and
+        # leaves OCA grouping (and parentId) out entirely — IBKR keeps the
+        # leg in its group, set at placement, from the order id. So the
+        # re-placed leg must carry NO ocaGroup / ocaType / parentId, while
+        # the new price still applies.
         ep, client = _endpoint()
         entry = OrderSpec(side=Side.BUY, quantity=1,
                           order_type=OrderType.MARKET, role=BracketRole.ENTRY)
@@ -331,11 +340,11 @@ class TestCancelModifyStatus(unittest.TestCase):
         ep.modify_order(sl_id, ModifySpec(new_stop_price=88.0,
                                           order_type=OrderType.STOP))
         _oid, _contract, order = client.modified[-1]
-        # The re-placed leg carries its OCA group + type and parentId, so
-        # IBKR sees an in-group modify rather than an OCA-type revision.
-        self.assertTrue(order.ocaGroup)
-        self.assertEqual(order.ocaType, 1)
-        self.assertTrue(order.parentId)
+        # The re-placed leg must NOT restate OCA grouping or the parent —
+        # restating either is what IBKR rejects as a group revision.
+        self.assertFalse(getattr(order, "ocaGroup", ""))
+        self.assertFalse(getattr(order, "ocaType", 0))
+        self.assertFalse(getattr(order, "parentId", 0))
         # And the price change still went through.
         self.assertEqual(order.auxPrice, 88.0)
 

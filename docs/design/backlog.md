@@ -22,51 +22,48 @@ enabled IBKR-source pair is actually present. No further action.
 
 ---
 
-## 2. `code=10327 OCA group type revision is not allowed` on every
-##    bracket-leg MODIFY — FIX WRITTEN, AWAITING PAPER VALIDATION
+## 2. OCA error on every bracket-leg MODIFY — FIX REWRITTEN, DEMO-VALIDATED
 
-**Symptom (live log, 2026-06-19):** after placing a bracket on the IBKR
-follower, every modify of a stop/TP leg logged, right after
-"Replicated EventKind.MODIFY":
+**The full story (two wrong attempts, both seen live on paper):**
 
-    IBKR error reqId=3 code=10327: OCA group type revision is not allowed.
+1. **`code=10327 OCA group type revision is not allowed`.** Originally
+   the modify path (`_clone_order`) re-placed the leg with NO OCA fields.
+   IBKR rejected the group-type revision.
+2. **`code=10326 OCA group revision is not allowed`.** The first "fix"
+   then re-sent `ocaGroup` + `ocaType` (and `parentId`) on the modify to
+   keep the leg "in its group". IBKR rejected this too — AND, verified
+   directly via `reqAllOpenOrders` on both demo followers, **the stop
+   price did NOT move** (leg stayed at the old aux price). So 10326 was
+   BLOCKING, not cosmetic: the modify was rejected outright.
 
-**Root cause (confirmed):** IBKR modifies an order by re-placing the
-full order under the same id. `IbkrApiClient.place_bracket` stamps each
-exit leg with its OCA group (`ocaGroup="oca_<entry>"`, `ocaType=1`) on
-the very `Order` object the follower remembers. But the modify path
-rebuilt the payload via `_clone_order`, which copied action / type /
-qty / tif / prices but NOT `ocaGroup` / `ocaType` / `parentId`. So the
-re-placed leg arrived with an empty OCA group, and IBKR rejected the
-group-type revision. The price change still applied; only the
-(redundant) OCA re-declaration was rejected.
+**Root cause (confirmed):** IBKR modifies by re-placing the full order
+under the same id, but OCA grouping is a PLACE-TIME property. IBKR
+already remembers the leg's group from its order id; a modify that
+restates `ocaGroup` / `ocaType` (or `parentId`) is treated as a group
+revision and rejected. The leg must NOT carry OCA fields on a modify.
 
-**Fix (committed):** `_clone_order` in
-`tradesync/brokers/ibkr_follower_endpoint.py` now carries `ocaGroup`,
-`ocaType` and `parentId` through when the remembered order has them, so
-a bracket-leg modify is an in-group modify rather than an OCA-type
-revision. A plain (non-bracket) order has none of these set, so it's a
-no-op there.
+**Fix (committed, demo-validated):** `_clone_order` no longer copies
+`ocaGroup` / `ocaType` / `parentId`. A bracket-leg modify now carries
+only action / type / qty / tif + the changed price. IBKR accepts it and
+the placement-time OCO grouping stays intact at the broker.
 
-**Tests (committed, green):** in `tests/test_ibkr_follower_endpoint.py`
-the fake client now mirrors the real client by stamping ocaGroup /
-ocaType / parentId on bracket children, and two cases pin the fix:
-`test_modify_bracket_leg_preserves_oca_group` (leg keeps its group +
-type + parent, price still updates) and
-`test_modify_single_order_has_no_oca_group` (a single order's modify
-does NOT invent a group).
+**Validation method (now the reliable tool):** `/tmp/check_stops.py` —
+a READ-ONLY ibapi client (`reqAllOpenOrders`, spare client_id, no
+place/modify/cancel) that connects to each follower Gateway and prints
+each open order's actual price as IBKR holds it. This is how the 10326
+rejection was proven to leave the stop unmoved, and how the rewritten
+fix should be re-confirmed: move the stop, then read both followers and
+check the aux price actually changed.
 
-**STILL REQUIRED before trusting with real stops — PAPER VALIDATION:**
-unit tests prove the payload shape; they do NOT prove IBKR accepts it.
-On the demo Gateways, place a bracket, move the stop and the take-profit,
-and confirm in the live log that:
-  1. no `code=10327` fires on the modify, and
-  2. the new stop / TP prices actually take effect, and
-  3. the OCO still works (filling/cancelling one leg cancels the other).
-Only after that should this be relied on in a real-money session.
-This is the LIVE order-modification path for bracket legs (it moves real
-stops); there is no Replicator fallback, so treat it with the same care
-as any change to the live engine.
+**Tests (committed, green):** `test_modify_bracket_leg_strips_oca_group`
+now asserts the modify carries NO ocaGroup / ocaType / parentId while
+the new price still applies; `test_modify_single_order_has_no_oca_group`
+unchanged. The fake client still stamps OCA on bracket children at place
+time (correct), and the test verifies the modify STRIPS them.
+
+**Note:** this is the LIVE order-modification path for bracket legs (it
+moves real stops); there is no Replicator fallback. Re-validate on demo
+after any change before relying on it in a real-money session.
 
 ---
 

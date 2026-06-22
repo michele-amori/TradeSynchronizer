@@ -290,23 +290,26 @@ def _clone_order(src: Order) -> Order:
         o.lmtPrice = src.lmtPrice
     if getattr(src, "auxPrice", None) is not None:
         o.auxPrice = src.auxPrice
-    # Carry the OCA grouping through a modify. A bracket child is placed
-    # as a member of an OCA group (ocaGroup "oca_<entry>", ocaType 1, set
-    # by IbkrApiClient.place_bracket on the very Order object we remember
-    # here). IBKR modifies by re-placing the full order under the same
-    # id; if we drop ocaGroup, IBKR sees the leg leaving its group and
-    # rejects the re-place with OCA error code 10327 ("OCA group type
-    # revision is not allowed"). The price change still applied, but the
-    # error fired on every bracket-leg modify and would mask a genuine
-    # OCA problem. Preserving the group makes it an in-group modify,
-    # which IBKR accepts cleanly; parentId is carried for the same
-    # reason. Non-bracket orders don't set these, so this is a no-op
-    # for them.
-    if getattr(src, "ocaGroup", ""):
-        o.ocaGroup = src.ocaGroup
-        o.ocaType = getattr(src, "ocaType", 0)
-    if getattr(src, "parentId", 0):
-        o.parentId = src.parentId
+    # OCA fields are deliberately NOT carried onto a modify.
+    #
+    # History (both observed live on paper, with the stop-price proven
+    # unchanged afterwards via reqAllOpenOrders):
+    #   * Originally we sent no OCA fields → IBKR rejected the bracket-leg
+    #     modify with code 10327 "OCA group type revision is not allowed".
+    #   * So we then re-sent ocaGroup+ocaType on the modify → IBKR instead
+    #     rejected it with code 10326 "OCA group revision is not allowed",
+    #     and the stop did NOT move (verified: leg stayed at the old aux
+    #     price on both followers).
+    # The resolution: a modify must re-place ONLY the changed economic
+    # fields and leave OCA grouping entirely out. IBKR already knows the
+    # leg's group from its order id and keeps it; the group is a
+    # place-time property, not something a modify may restate. parentId
+    # is dropped for the same reason — restating the bracket parent on a
+    # standalone re-place is what IBKR treats as a group revision.
+    #
+    # Net effect: a bracket-leg modify now carries action/type/qty/tif +
+    # the new price only, which IBKR accepts, and the OCO grouping set at
+    # placement remains intact at the broker.
     o.eTradeOnly = False
     o.firmQuoteOnly = False
     return o
