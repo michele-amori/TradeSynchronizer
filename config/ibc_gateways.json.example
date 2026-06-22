@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "_comment": "Port -> IB Gateway launch command map, used at engine startup to bring up exactly the Gateways the ENABLED pairs need (one per distinct follower port), one at a time. Copy this to config/ibc_gateways.json (gitignored) and adjust. Each key is the API port a pair's ibkr_gateway points at; each value says how to launch the Gateway that serves it. Use EITHER the convenience form {script, arg, login} or an explicit {command: [argv...], login}. 'login' is informational (shown in logs). A port already listening is left untouched (a logged-in Gateway is never restarted). A required port with no entry here is reported and skipped — open that Gateway by hand. IMPORTANT: the launched Gateway must log into the IBKR user that owns the account the pair expects; if it exposes a different account, the follower's connect-time guardrail will refuse the pipeline.",
+  "gateways": {
+    "4002": {
+      "script": "~/ibc-demo/start-gateway.sh",
+      "arg": "A",
+      "login": "your_paper_login_for_port_4002"
+    },
+    "4003": {
+      "command": ["/Users/you/ibc-demo/start-gateway.sh", "B"],
+      "login": "your_paper_login_for_port_4003"
+    }
+  }
+}

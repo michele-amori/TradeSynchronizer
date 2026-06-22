@@ -36,6 +36,9 @@ venv/
 # account ids). UI convenience only; see config/accounts.json.example.
 /config/accounts.json
 /config/accounts.json.bak-*
+# Port→IB Gateway launch-command map — user-local (machine-specific
+# paths/logins). See config/ibc_gateways.json.example for a template.
+/config/ibc_gateways.json
 
 # OS noise
 .DS_Store

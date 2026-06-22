@@ -459,10 +459,30 @@ def _build_source_pipelines_or_empty(cfg: Config, log: logging.Logger):
     # becomes ready when they finish logging in, which the engine's
     # connect step waits for.
     if rep_cfg.needs_ibkr_gateway():
-        from tradesync.ibkr_gateway_launcher import ensure_gateway_running
-        g = rep_cfg.ibkr_gateway
-        status = ensure_gateway_running(api_host=g.host, api_port=g.port)
-        log.info("IB Gateway: %s", status.message)
+        from tradesync.ibc_gateway_orchestrator import (
+            ensure_ports_listening,
+            load_gateway_map,
+            default_gateway_map_path,
+            required_ports_for,
+            PortStartResult,
+        )
+        ports = required_ports_for(rep_cfg, rep_cfg.ibkr_gateway)
+        try:
+            gw_map = load_gateway_map(default_gateway_map_path(PROJECT_ROOT))
+        except ValueError as e:
+            log.warning("IBC gateway map invalid (%s) — auto-launch off", e)
+            gw_map = {}
+        log.info("IB Gateways: enabled pairs need port(s) %s",
+                 ", ".join(str(p) for p in ports) or "(none)")
+        for outcome in ensure_ports_listening(
+                ports, gw_map, host=rep_cfg.ibkr_gateway.host):
+            level = (logging.WARNING
+                     if outcome.result in (PortStartResult.LAUNCHED_TIMEOUT,
+                                           PortStartResult.NO_MAPPING,
+                                           PortStartResult.LAUNCH_FAILED)
+                     else logging.INFO)
+            log.log(level, "IB Gateway port %d: %s",
+                    outcome.port, outcome.message)
 
     def tradovate_factory(env: str, account_id: str) -> TradovateClient:
         c = TradovateClient(

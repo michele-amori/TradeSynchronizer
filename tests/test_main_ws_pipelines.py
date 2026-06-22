@@ -104,12 +104,13 @@ class TestBuildSourcePipelines(unittest.TestCase):
                        return_value=rep_cfg), \
                  patch("tradesync.brokers.ibkr_api_client.IbkrApiClient"), \
                  patch("tradesync.brokers.tradovate.TradovateClient"), \
-                 patch("tradesync.ibkr_gateway_launcher."
-                       "ensure_gateway_running") as mock_gw:
+                 patch("tradesync.ibc_gateway_orchestrator."
+                       "ensure_ports_listening",
+                       return_value=[]) as mock_gw:
                 out = main._build_source_pipelines_or_empty(self._cfg(), log)
                 self.assertEqual(len(out), 1)
                 self.assertEqual(out[0].pair_name, "tv→ibkr")
-                # An IBKR-follower pair must trigger the Gateway opener.
+                # An IBKR-follower pair must trigger the port orchestrator.
                 mock_gw.assert_called_once()
 
     def test_tradovate_follower_does_not_open_gateway(self):
@@ -130,8 +131,9 @@ class TestBuildSourcePipelines(unittest.TestCase):
             with patch("tradesync.replication_config.ReplicationConfig.load",
                        return_value=rep_cfg), \
                  patch("tradesync.brokers.tradovate.TradovateClient"), \
-                 patch("tradesync.ibkr_gateway_launcher."
-                       "ensure_gateway_running") as mock_gw:
+                 patch("tradesync.ibc_gateway_orchestrator."
+                       "ensure_ports_listening",
+                       return_value=[]) as mock_gw:
                 main._build_source_pipelines_or_empty(self._cfg(), log)
                 mock_gw.assert_not_called()
 
