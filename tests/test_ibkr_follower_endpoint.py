@@ -313,19 +313,18 @@ class TestCancelModifyStatus(unittest.TestCase):
         client.statuses[555] = "Filled"
         self.assertEqual(ep.order_status("555"), "Filled")
 
-    def test_modify_bracket_leg_strips_oca_group(self):
-        # Regression for the live OCA errors on a bracket-leg modify,
-        # both verified on paper with the stop price proven unchanged
-        # afterwards via reqAllOpenOrders:
-        #   * sending no OCA fields → code 10327 "OCA group type revision
-        #     is not allowed";
-        #   * re-sending ocaGroup+ocaType → code 10326 "OCA group revision
-        #     is not allowed", and the stop did NOT move.
-        # The fix: a modify re-places ONLY the changed economic fields and
-        # leaves OCA grouping (and parentId) out entirely — IBKR keeps the
-        # leg in its group, set at placement, from the order id. So the
-        # re-placed leg must carry NO ocaGroup / ocaType / parentId, while
-        # the new price still applies.
+    def test_modify_bracket_leg_preserves_all_fields(self):
+        # The OCA saga, resolved against IBKR's TWS API "Modifying Orders"
+        # docs. Both bad states were seen live on paper, stop price checked
+        # via reqAllOpenOrders each time: a modify with no OCA fields got
+        # code 10327 (group type revision), a modify re-stating only
+        # ocaGroup+ocaType got code 10326 (group revision); neither moved
+        # the stop. The rule: a modify is placeOrder with the SAME fields
+        # as the open order except the one being changed (same orderId).
+        # Any hand-picked subset drops fields the placed leg had, and IBKR
+        # treats the differing re-place as a group revision. So the modify
+        # must re-send every field as placed (parentId, ocaGroup, ocaType
+        # included), changing only the price.
         ep, client = _endpoint()
         entry = OrderSpec(side=Side.BUY, quantity=1,
                           order_type=OrderType.MARKET, role=BracketRole.ENTRY)
@@ -335,17 +334,16 @@ class TestCancelModifyStatus(unittest.TestCase):
                        stop_price=90.0, role=BracketRole.STOP_LOSS)
         ref = ep.place_bracket(BracketSpec(entry=entry, children=[tp, sl]),
                                symbol="MNQM6")
-        # Move the stop-loss leg (the second child).
         sl_id = ref.child_order_ids[1]
+        entry_id = int(ref.entry_order_id)
         ep.modify_order(sl_id, ModifySpec(new_stop_price=88.0,
                                           order_type=OrderType.STOP))
         _oid, _contract, order = client.modified[-1]
-        # The re-placed leg must NOT restate OCA grouping or the parent —
-        # restating either is what IBKR rejects as a group revision.
-        self.assertFalse(getattr(order, "ocaGroup", ""))
-        self.assertFalse(getattr(order, "ocaType", 0))
-        self.assertFalse(getattr(order, "parentId", 0))
-        # And the price change still went through.
+        # Every placement field is re-sent identically...
+        self.assertEqual(order.ocaGroup, "oca_%d" % entry_id)
+        self.assertEqual(order.ocaType, 1)
+        self.assertEqual(order.parentId, entry_id)
+        # ...with only the price changed.
         self.assertEqual(order.auxPrice, 88.0)
 
     def test_modify_single_order_has_no_oca_group(self):

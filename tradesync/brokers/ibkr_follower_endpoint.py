@@ -33,6 +33,7 @@ last Order, keyed by id, to rebuild the modify payload.
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Dict
 
@@ -279,37 +280,31 @@ class IbkrFollowerEndpoint:
 
 
 def _clone_order(src: Order) -> Order:
-    """Shallow-copy the order fields we set, so a modify doesn't mutate
-    the remembered original until it succeeds."""
-    o = Order()
-    o.action = src.action
-    o.orderType = src.orderType
-    o.totalQuantity = src.totalQuantity
-    o.tif = getattr(src, "tif", "DAY")
-    if getattr(src, "lmtPrice", None) is not None:
-        o.lmtPrice = src.lmtPrice
-    if getattr(src, "auxPrice", None) is not None:
-        o.auxPrice = src.auxPrice
-    # OCA fields are deliberately NOT carried onto a modify.
-    #
-    # History (both observed live on paper, with the stop-price proven
-    # unchanged afterwards via reqAllOpenOrders):
-    #   * Originally we sent no OCA fields → IBKR rejected the bracket-leg
-    #     modify with code 10327 "OCA group type revision is not allowed".
-    #   * So we then re-sent ocaGroup+ocaType on the modify → IBKR instead
-    #     rejected it with code 10326 "OCA group revision is not allowed",
-    #     and the stop did NOT move (verified: leg stayed at the old aux
-    #     price on both followers).
-    # The resolution: a modify must re-place ONLY the changed economic
-    # fields and leave OCA grouping entirely out. IBKR already knows the
-    # leg's group from its order id and keeps it; the group is a
-    # place-time property, not something a modify may restate. parentId
-    # is dropped for the same reason — restating the bracket parent on a
-    # standalone re-place is what IBKR treats as a group revision.
-    #
-    # Net effect: a bracket-leg modify now carries action/type/qty/tif +
-    # the new price only, which IBKR accepts, and the OCO grouping set at
-    # placement remains intact at the broker.
-    o.eTradeOnly = False
-    o.firmQuoteOnly = False
-    return o
+    """A COMPLETE copy of the remembered order, so a modify re-places it
+    with every field identical except the one being changed (the caller
+    then overwrites the price/qty/tif on the copy).
+
+    Why a full copy rather than a hand-picked rebuild — the whole OCA
+    saga (all observed live on paper, stop price verified via
+    reqAllOpenOrders each time):
+      * Rebuilding a fresh Order with only action/type/qty/tif/price and
+        NO OCA fields → IBKR rejected with code 10327 "OCA group type
+        revision is not allowed", stop did not move.
+      * Rebuilding it but re-stating ocaGroup+ocaType → code 10326 "OCA
+        group revision is not allowed", stop still did not move.
+    The actual rule, from IBKR's TWS API "Modifying Orders" docs: a
+    modify is `placeOrder` "with the same fields as the open order,
+    except for the parameter to modify" (same orderId). ANY hand-picked
+    subset drops fields the placed order had (parentId, ocaGroup, ocaType,
+    transmit, account, …); IBKR sees the re-place differ from the live
+    order and treats it as an OCA group revision. So we must send back
+    EVERY field exactly as placed.
+
+    `copy.copy` shallow-copies the whole Order — every attribute the
+    bracket placement stamped (parentId / ocaGroup / ocaType / transmit /
+    account / eTradeOnly / firmQuoteOnly / …) is preserved automatically,
+    with no risk of forgetting one. The copy (not the remembered
+    original) is mutated by the caller, so the remembered order is left
+    intact until the modify is confirmed.
+    """
+    return copy.copy(src)

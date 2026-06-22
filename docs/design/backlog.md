@@ -22,44 +22,55 @@ enabled IBKR-source pair is actually present. No further action.
 
 ---
 
-## 2. OCA error on every bracket-leg MODIFY — FIX REWRITTEN, DEMO-VALIDATED
+## 2. OCA error on every bracket-leg MODIFY — RESOLVED PER IBKR DOCS,
+##    AWAITING FINAL DEMO RE-VALIDATION
 
-**The full story (two wrong attempts, both seen live on paper):**
+**Three states observed live on paper (stop price checked via
+`reqAllOpenOrders` each time — the stop NEVER moved in the two failures):**
 
-1. **`code=10327 OCA group type revision is not allowed`.** Originally
-   the modify path (`_clone_order`) re-placed the leg with NO OCA fields.
-   IBKR rejected the group-type revision.
-2. **`code=10326 OCA group revision is not allowed`.** The first "fix"
-   then re-sent `ocaGroup` + `ocaType` (and `parentId`) on the modify to
-   keep the leg "in its group". IBKR rejected this too — AND, verified
-   directly via `reqAllOpenOrders` on both demo followers, **the stop
-   price did NOT move** (leg stayed at the old aux price). So 10326 was
-   BLOCKING, not cosmetic: the modify was rejected outright.
+1. **`code=10327 OCA group type revision is not allowed`.** Modify
+   re-placed the leg with NO OCA fields (`_clone_order` rebuilt a fresh
+   Order with only action/type/qty/tif/price). Rejected.
+2. **`code=10326 OCA group revision is not allowed`.** Then re-sent
+   `ocaGroup` + `ocaType` (+`parentId`) but STILL as a hand-picked
+   subset. Rejected.
+3. Back to NO OCA fields → **10327 again**, stop confirmed unmoved at
+   the old aux price on both followers. This proved the
+   "which OCA fields?" framing was a dead end: BOTH directions fail.
 
-**Root cause (confirmed):** IBKR modifies by re-placing the full order
-under the same id, but OCA grouping is a PLACE-TIME property. IBKR
-already remembers the leg's group from its order id; a modify that
-restates `ocaGroup` / `ocaType` (or `parentId`) is treated as a group
-revision and rejected. The leg must NOT carry OCA fields on a modify.
+**Root cause (per IBKR TWS API "Modifying Orders" docs):** a modify is
+`placeOrder` "with the same fields as the open order, except for the
+parameter to modify" (same `orderId`). The bug was never *which* OCA
+fields to send — it was that `_clone_order` rebuilt a PARTIAL order, so
+whatever subset it chose, the re-place differed from the live leg in
+some field (parentId / ocaGroup / ocaType / transmit / …) and IBKR read
+the difference as an OCA group revision. The leg must be re-sent with
+EVERY field identical, only the price changed.
 
-**Fix (committed, demo-validated):** `_clone_order` no longer copies
-`ocaGroup` / `ocaType` / `parentId`. A bracket-leg modify now carries
-only action / type / qty / tif + the changed price. IBKR accepts it and
-the placement-time OCO grouping stays intact at the broker.
+**Fix (committed, awaiting demo re-validation):** `_clone_order` now
+returns `copy.copy(src)` — a full shallow copy of the remembered order,
+preserving every attribute the bracket placement stamped (parentId,
+ocaGroup, ocaType, transmit, account, …) automatically, with no risk of
+dropping one. `modify_order` then overwrites only the changed price/qty/
+tif on the copy; the remembered original is left intact until the modify
+is confirmed.
 
-**Validation method (now the reliable tool):** `/tmp/check_stops.py` —
-a READ-ONLY ibapi client (`reqAllOpenOrders`, spare client_id, no
-place/modify/cancel) that connects to each follower Gateway and prints
-each open order's actual price as IBKR holds it. This is how the 10326
-rejection was proven to leave the stop unmoved, and how the rewritten
-fix should be re-confirmed: move the stop, then read both followers and
-check the aux price actually changed.
+**Validation method (the reliable tool):** `/tmp/check_stops.py` —
+READ-ONLY ibapi (`reqAllOpenOrders`, spare client_id, no
+place/modify/cancel) printing each open order's actual price as IBKR
+holds it. Both prior failures were caught with it.
 
-**Tests (committed, green):** `test_modify_bracket_leg_strips_oca_group`
-now asserts the modify carries NO ocaGroup / ocaType / parentId while
-the new price still applies; `test_modify_single_order_has_no_oca_group`
-unchanged. The fake client still stamps OCA on bracket children at place
-time (correct), and the test verifies the modify STRIPS them.
+**STILL REQUIRED — final demo re-validation:** unit tests prove the
+payload now re-sends all fields; they do NOT prove IBKR accepts it. On
+the demo Gateways: place ONE fresh bracket, move the stop, then read
+both followers with check_stops.py and confirm the aux price ACTUALLY
+CHANGED (and no 10326/10327 in the log). Only then rely on it with real
+money.
+
+**Tests (committed, green):** `test_modify_bracket_leg_preserves_all_fields`
+asserts the modify re-sends ocaGroup/ocaType/parentId identical to the
+placement, with only the price changed; `test_modify_single_order_has_no_oca_group`
+unchanged (a plain order has no OCA, and copy doesn't invent one).
 
 **Note:** this is the LIVE order-modification path for bracket legs (it
 moves real stops); there is no Replicator fallback. Re-validate on demo
