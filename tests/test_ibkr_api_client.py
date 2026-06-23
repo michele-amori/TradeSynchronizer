@@ -311,8 +311,26 @@ class TestOrderStatus(unittest.TestCase):
 
         class _State:
             status = "PreSubmitted"
-        c._on_open_order(777, _State())
+        c._on_open_order(777, None, None, _State())
         self.assertEqual(c.order_status(777), "PreSubmitted")
+
+    def test_open_order_echo_captured(self):
+        # The order EXACTLY as IBKR echoed it must be stashed so a later
+        # OCA-safe modify can re-place IBKR's own stored order.
+        c = _connected_client()
+
+        class _State:
+            status = "Submitted"
+        contract = Contract()
+        order = Order()
+        order.ocaGroup = "oca_x_5"
+        c._on_open_order(888, contract, order, _State())
+        echo = c.open_order_echo(888)
+        self.assertIsNotNone(echo)
+        self.assertIs(echo[0], contract)
+        self.assertIs(echo[1], order)
+        # Unknown id → None (no echo yet).
+        self.assertIsNone(c.open_order_echo(999))
 
     def test_unknown_order_raises(self):
         c = _connected_client()

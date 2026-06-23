@@ -250,19 +250,34 @@ class IbkrFollowerEndpoint:
         self._client.cancel_order(int(follower_order_id))
 
     def modify_order(self, follower_order_id: str, changes: ModifySpec) -> None:
-        # IBKR modifies by re-placing the full order under the same id.
-        # Rebuild from the remembered order, applying only the changed
-        # fields. order_type is needed to gate prices; the neutral
-        # ModifySpec carries it (the replicator fills it from the
-        # source order type even when only price changed).
-        remembered = self._placed.get(follower_order_id)
-        if remembered is None:
-            raise IbkrApiError(
-                f"modify_order: no remembered IBKR order for id "
-                f"{follower_order_id!r} — can't rebuild the modify payload")
-        contract, prev = remembered
-        order = _clone_order(prev)
-        self._stamp_account(order)
+        # IBKR modifies by re-placing the full order under the same id,
+        # applying only the changed fields. order_type gates which price
+        # to set; the neutral ModifySpec carries it (the replicator fills
+        # it from the source order type even when only price changed).
+        # Prefer the order EXACTLY as IBKR echoed it (openOrder). For an
+        # OCA bracket leg this is REQUIRED: re-placing IBKR's own stored
+        # order with only the price changed is the only form IBKR accepts
+        # — re-placing the order we built ourselves is rejected as an OCA
+        # group revision (10326/10327), proven empirically via oca_probe.
+        # The echo already carries IBKR's account/oca/parent fields, so we
+        # touch ONLY the changed price/qty/tif. Fall back to the
+        # remembered order if no echo has arrived yet (rare timing gap
+        # right after placement).
+        oid = int(follower_order_id)
+        echo = self._client.open_order_echo(oid)
+        if echo is not None:
+            contract, base = echo
+            order = _clone_order(base)
+        else:
+            remembered = self._placed.get(follower_order_id)
+            if remembered is None:
+                raise IbkrApiError(
+                    f"modify_order: no IBKR order echo or remembered order "
+                    f"for id {follower_order_id!r} — can't rebuild the "
+                    f"modify payload")
+            contract, prev = remembered
+            order = _clone_order(prev)
+            self._stamp_account(order)
         if changes.new_quantity is not None:
             order.totalQuantity = changes.new_quantity
         ot = changes.order_type
@@ -298,19 +313,22 @@ def _clone_order(src: Order) -> Order:
         revision is not allowed", stop did not move.
       * Rebuilding it but re-stating ocaGroup+ocaType → code 10326 "OCA
         group revision is not allowed", stop still did not move.
-    The actual rule, from IBKR's TWS API "Modifying Orders" docs: a
-    modify is `placeOrder` "with the same fields as the open order,
-    except for the parameter to modify" (same orderId). ANY hand-picked
-    subset drops fields the placed order had (parentId, ocaGroup, ocaType,
-    transmit, account, …); IBKR sees the re-place differ from the live
-    order and treats it as an OCA group revision. So we must send back
-    EVERY field exactly as placed.
+    The actual rule, established empirically via oca_probe against a live
+    demo Gateway: re-sending EVERY field exactly as WE placed it (full
+    copy.copy of our remembered order) STILL gets 10326 for an OCA
+    bracket leg. The only forms IBKR accepts are the ones built from the
+    order IBKR itself echoed back via openOrder, with only the price
+    changed — because on accept IBKR normalises/sets fields whose values
+    differ from what we sent, and re-placing our version is read as an
+    OCA group revision while re-placing IBKR's own stored order is not.
+    That is why modify_order prefers the openOrder echo as the base; this
+    helper just clones whatever base it's given (echo when available,
+    remembered order as fallback) so the caller can change only the
+    price/qty/tif without mutating the stored original.
 
-    `copy.copy` shallow-copies the whole Order — every attribute the
-    bracket placement stamped (parentId / ocaGroup / ocaType / transmit /
-    account / eTradeOnly / firmQuoteOnly / …) is preserved automatically,
-    with no risk of forgetting one. The copy (not the remembered
-    original) is mutated by the caller, so the remembered order is left
+    `copy.copy` shallow-copies the whole Order — every attribute is
+    preserved automatically, with no risk of forgetting one. The copy
+    (not the original) is mutated by the caller, so the source is left
     intact until the modify is confirmed.
     """
     return copy.copy(src)

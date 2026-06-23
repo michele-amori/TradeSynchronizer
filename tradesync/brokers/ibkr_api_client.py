@@ -164,7 +164,7 @@ class _IbkrWrapper(EWrapper):
         self._owner._on_order_status(orderId, status)
 
     def openOrder(self, orderId, contract, order, orderState):
-        self._owner._on_open_order(orderId, orderState)
+        self._owner._on_open_order(orderId, contract, order, orderState)
 
     # — positions (reconciliation) —
     def position(self, account, contract, position, avgCost):
@@ -203,6 +203,15 @@ class IbkrApiClient(EClient):
         # Latest known status per order id, updated by orderStatus
         # callbacks (which stream in unsolicited as well as on demand).
         self._order_status: Dict[int, str] = {}
+
+        # Order EXACTLY as IBKR echoed it back (openOrder callback),
+        # keyed by order id: (contract, order). A modify of an OCA
+        # bracket leg MUST re-place this echoed order (price changed
+        # only), never the order we built ourselves — re-placing our own
+        # version is read by IBKR as an OCA group revision and rejected
+        # 10326/10327 (proven empirically via oca_probe; the echo carries
+        # IBKR's canonical field set, so re-placing it is accepted).
+        self._open_order_echo: Dict[int, tuple] = {}
 
         # conId cache: tradovate-short-symbol → _ContractResolution
         self._contract_cache: Dict[str, _ContractResolution] = {}
@@ -334,11 +343,27 @@ class IbkrApiClient(EClient):
         with self._lock:
             self._order_status[order_id] = status
 
-    def _on_open_order(self, order_id: int, order_state) -> None:
+    def _on_open_order(self, order_id: int, contract, order,
+                       order_state) -> None:
         status = getattr(order_state, "status", None)
-        if status:
-            with self._lock:
+        with self._lock:
+            if status:
                 self._order_status[order_id] = status
+            # Stash the order EXACTLY as IBKR stored it, for an OCA-safe
+            # modify later (see _open_order_echo). IBKR re-sends openOrder
+            # with the updated order after every accepted modify, so this
+            # always reflects the current server-side state.
+            if order is not None:
+                self._open_order_echo[order_id] = (contract, order)
+
+    def open_order_echo(self, order_id: int):
+        """The order EXACTLY as IBKR echoed it via openOrder (contract,
+        order), or None if no echo has arrived for this id yet. The
+        follower uses it to build an OCA-safe modify — re-placing IBKR's
+        own stored order (price changed only) is the only form IBKR
+        accepts for a bracket leg (see _open_order_echo)."""
+        with self._lock:
+            return self._open_order_echo.get(order_id)
 
     def _on_position(self, account, contract, position) -> None:
         # One callback per (account, contract). reqPositions streams

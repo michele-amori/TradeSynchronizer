@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 
 from ibapi.common import UNSET_DOUBLE
 from ibapi.contract import Contract
+from ibapi.order import Order
 
 from tradesync.brokers.endpoint import (
     FollowerEndpoint,
@@ -53,6 +54,11 @@ class FakeIbkrApiClient:
         self.cancelled = []
         self.modified = []         # (id, contract, order)
         self.statuses = {}
+        # order id -> (contract, order) as IBKR "echoed" it. Empty by
+        # default so modify falls back to the remembered order (keeps the
+        # pre-echo tests valid); populate per-test to exercise the echo
+        # path the real client uses for OCA-safe modifies.
+        self.echoes = {}
         self.connected_count = 0
         self.disconnected_count = 0
         self._next = 1000
@@ -107,6 +113,9 @@ class FakeIbkrApiClient:
 
     def modify_order(self, *, order_id, contract, order):
         self.modified.append((order_id, contract, order))
+
+    def open_order_echo(self, order_id):
+        return self.echoes.get(order_id)
 
     def order_status(self, order_id):
         return self.statuses.get(order_id, "Submitted")
@@ -296,6 +305,81 @@ class TestCancelModifyStatus(unittest.TestCase):
         self.assertEqual(oid, 1000)
         self.assertEqual(order.lmtPrice, 105.0)
         self.assertEqual(order.orderType, "LMT")
+
+    def test_modify_prefers_ibkr_echo_over_remembered(self):
+        # When IBKR has echoed the order back (openOrder), the modify must
+        # re-place THAT echoed order (price changed only), not the order
+        # we remembered building — re-placing IBKR's own stored order is
+        # the only form IBKR accepts for an OCA bracket leg (oca_probe).
+        # Mark the echo with an ocaGroup the remembered order lacks and
+        # assert the modify carried it.
+        ep, client = _endpoint()
+        ref = ep.place_order(
+            OrderSpec(side=Side.SELL, quantity=1, order_type=OrderType.STOP,
+                      stop_price=90.0),
+            symbol="MNQM6")
+        oid = int(ref.follower_order_id)
+        echo_order = Order()
+        echo_order.orderType = "STP"
+        echo_order.auxPrice = 90.0
+        echo_order.ocaGroup = "oca_ibkr_canonical_7"   # only the echo has it
+        client.echoes[oid] = (Contract(), echo_order)
+        ep.modify_order(ref.follower_order_id,
+                        ModifySpec(new_stop_price=85.0,
+                                   order_type=OrderType.STOP))
+        _id, _c, sent = client.modified[-1]
+        # Built from IBKR's echo (carries its ocaGroup), not the
+        # remembered order...
+        self.assertEqual(sent.ocaGroup, "oca_ibkr_canonical_7")
+        # ...with only the price changed.
+        self.assertEqual(sent.auxPrice, 85.0)
+
+    def test_modify_falls_back_to_remembered_when_no_echo(self):
+        # No echo yet (timing gap right after placement) → fall back to
+        # the remembered order rather than failing.
+        ep, client = _endpoint()
+        ref = ep.place_order(
+            OrderSpec(side=Side.SELL, quantity=1, order_type=OrderType.STOP,
+                      stop_price=90.0),
+            symbol="MNQM6")
+        # client.echoes is empty → open_order_echo returns None.
+        ep.modify_order(ref.follower_order_id,
+                        ModifySpec(new_stop_price=85.0,
+                                   order_type=OrderType.STOP))
+        _id, _c, sent = client.modified[-1]
+        self.assertEqual(sent.auxPrice, 85.0)
+
+    def test_two_ibkr_followers_each_use_their_own_echo(self):
+        # Tradovate master with 2 IBKR followers: each follower has its
+        # own endpoint + client, so a modify must re-place THAT follower's
+        # openOrder echo — no cross-talk. The single modify path runs
+        # through this endpoint for every IBKR follower regardless of
+        # source, so the OCA-safe echo fix applies to each one.
+        client_a = FakeIbkrApiClient()
+        client_b = FakeIbkrApiClient()
+        ep_a = IbkrFollowerEndpoint(client_a, env="demo", account_id="DUAAA")
+        ep_b = IbkrFollowerEndpoint(client_b, env="demo", account_id="DUBBB")
+        ref_a = ep_a.place_order(
+            OrderSpec(side=Side.SELL, quantity=1, order_type=OrderType.STOP,
+                      stop_price=90.0), symbol="MNQM6")
+        ref_b = ep_b.place_order(
+            OrderSpec(side=Side.SELL, quantity=1, order_type=OrderType.STOP,
+                      stop_price=90.0), symbol="MNQM6")
+        echo_a = Order(); echo_a.orderType = "STP"; echo_a.auxPrice = 90.0
+        echo_a.ocaGroup = "oca_DUAAA_1"
+        echo_b = Order(); echo_b.orderType = "STP"; echo_b.auxPrice = 90.0
+        echo_b.ocaGroup = "oca_DUBBB_1"
+        client_a.echoes[int(ref_a.follower_order_id)] = (Contract(), echo_a)
+        client_b.echoes[int(ref_b.follower_order_id)] = (Contract(), echo_b)
+        ep_a.modify_order(ref_a.follower_order_id, ModifySpec(
+            new_stop_price=85.0, order_type=OrderType.STOP))
+        ep_b.modify_order(ref_b.follower_order_id, ModifySpec(
+            new_stop_price=80.0, order_type=OrderType.STOP))
+        # Each follower's modify carried ITS OWN echo's group + price.
+        self.assertEqual(client_a.modified[-1][2].ocaGroup, "oca_DUAAA_1")
+        self.assertEqual(client_a.modified[-1][2].auxPrice, 85.0)
+        self.assertEqual(client_b.modified[-1][2].ocaGroup, "oca_DUBBB_1")
+        self.assertEqual(client_b.modified[-1][2].auxPrice, 80.0)
 
     def test_modify_unknown_id_raises(self):
         ep, _ = _endpoint()
