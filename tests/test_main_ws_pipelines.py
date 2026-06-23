@@ -204,7 +204,7 @@ class TestBuildNeutralIbkrSourceFollower(unittest.TestCase):
                                  ibkr_gateway=IbkrGatewayConfig(
                                      host="127.0.0.1", port=4001, client_id=12))
 
-    def test_ibkr_follower_builds_ibkr_endpoint_with_ratio_no_resolver(self):
+    def test_ibkr_follower_builds_ibkr_endpoint_with_ratio_and_resolver(self):
         rep = self._pair("ibkr", ratio=0.5)
         with patch("tradesync.replication_config.ReplicationConfig.load",
                    return_value=rep), \
@@ -214,18 +214,21 @@ class TestBuildNeutralIbkrSourceFollower(unittest.TestCase):
              patch("tradesync.event_replicator.EventReplicator") as MockER, \
              patch("tradesync.proxy.ibkr_event_source_observer."
                    "IbkrEventSourceObserver"):
+            resolver = MagicMock()
             main._build_neutral_ibkr_source(
-                self._cfg(), MagicMock(), MagicMock(), MagicMock(), log)
+                self._cfg(), MagicMock(), resolver, MagicMock(), log)
             # IBKR client built from the gateway block
             MockClient.assert_called_once_with(
                 host="127.0.0.1", port=4001, client_id=12)
             # follower is the IBKR endpoint on the follower account
             self.assertTrue(MockFollower.called)
             self.assertEqual(MockFollower.call_args.kwargs["account_id"], "U999")
-            # EventReplicator got ratio=0.5 and NO conid_resolver
+            # EventReplicator got ratio=0.5 AND the conid->symbol resolver:
+            # the IBKR follower places by symbol (resolve_contract), so a
+            # conid-only IBKR-source event must still be mapped to a symbol.
             er_kwargs = MockER.call_args.kwargs
             self.assertEqual(er_kwargs["ratio"], 0.5)
-            self.assertIsNone(er_kwargs["conid_resolver"])
+            self.assertIs(er_kwargs["conid_resolver"], resolver.resolve_symbol)
 
     def test_tradovate_follower_keeps_resolver(self):
         rep = self._pair("tradovate", ratio=1.0)

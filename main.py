@@ -262,10 +262,12 @@ def _build_neutral_ibkr_source(cfg, tradovate, resolver, order_map, log):
         wants a symbol while the IBKR-source event carries a conid.
 
       * follower broker 'ibkr' → IbkrFollowerEndpoint on a SECOND IBKR
-        account (the IBKR→IBKR flow). No conid_resolver: the conid is
-        already the follower's native instrument id. The follower
-        Gateway is the one described by replication.json's ibkr_gateway
-        block (point it at the follower account's Gateway).
+        account (the IBKR→IBKR flow). STILL needs the conid→symbol
+        resolver: the follower endpoint places by symbol
+        (resolve_contract), not by conid, so the conid-only source event
+        must be mapped to a symbol just as in the Tradovate case. The
+        follower Gateway is the one described by replication.json's
+        ibkr_gateway block (point it at the follower account's Gateway).
 
     The follower size ratio is taken from the matching pair in BOTH
     cases (default 1.0 when there's no pair), so every pair type honours
@@ -282,8 +284,17 @@ def _build_neutral_ibkr_source(cfg, tradovate, resolver, order_map, log):
 
     if follower_broker == "ibkr":
         # IBKR→IBKR: follower is a SECOND IBKR account via its own
-        # Gateway (replication.json ibkr_gateway block). conid is already
-        # the follower's native id, so no conid_resolver is needed.
+        # Gateway (replication.json ibkr_gateway block). A conid_resolver
+        # IS still required: although the source conid is a valid IBKR
+        # instrument id on the follower too, the follower endpoint places
+        # by SYMBOL (IbkrFollowerEndpoint.place_* → resolve_contract(sym)),
+        # not by conid. The IBKR-source event carries only a conid and no
+        # symbol, so without a resolver EventReplicator can't derive the
+        # follower symbol and every order fails as "no conid_resolver is
+        # configured". resolver.resolve_symbol maps conid → the Tradovate-
+        # style short symbol (e.g. "MNQU6"), which resolve_contract then
+        # resolves to the follower's contract. Same resolver the
+        # Tradovate-follower branch uses.
         from tradesync.brokers.ibkr_api_client import IbkrApiClient
         from tradesync.brokers.ibkr_follower_endpoint import (
             IbkrFollowerEndpoint,
@@ -296,7 +307,7 @@ def _build_neutral_ibkr_source(cfg, tradovate, resolver, order_map, log):
         follower = IbkrFollowerEndpoint(
             client, env=pair.follower.env,
             account_id=str(pair.follower.account_id))
-        conid_resolver = None
+        conid_resolver = resolver.resolve_symbol
         log.warning(
             "🧪 IBKR→IBKR: master IBKR orders are mirrored onto IBKR "
             "account %s via Gateway %s:%d (clientId %d), ratio=%g. This "
