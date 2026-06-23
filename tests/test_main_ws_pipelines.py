@@ -223,12 +223,37 @@ class TestBuildNeutralIbkrSourceFollower(unittest.TestCase):
             # follower is the IBKR endpoint on the follower account
             self.assertTrue(MockFollower.called)
             self.assertEqual(MockFollower.call_args.kwargs["account_id"], "U999")
+            # The follower Gateway MUST be connected — nothing else does
+            # it on the IBKR-source addon path, so without this the first
+            # mirrored order fails "resolve_contract called while
+            # disconnected".
+            MockFollower.return_value.connect.assert_called_once_with()
             # EventReplicator got ratio=0.5 AND the conid->symbol resolver:
             # the IBKR follower places by symbol (resolve_contract), so a
             # conid-only IBKR-source event must still be mapped to a symbol.
             er_kwargs = MockER.call_args.kwargs
             self.assertEqual(er_kwargs["ratio"], 0.5)
             self.assertIs(er_kwargs["conid_resolver"], resolver.resolve_symbol)
+
+    def test_ibkr_follower_connect_failure_does_not_crash_startup(self):
+        # A follower Gateway that's down must NOT abort engine startup:
+        # the connect error is logged and swallowed, the builder still
+        # returns an observer (orders will fail until the Gateway is up).
+        rep = self._pair("ibkr", ratio=1.0)
+        with patch("tradesync.replication_config.ReplicationConfig.load",
+                   return_value=rep), \
+             patch("tradesync.brokers.ibkr_api_client.IbkrApiClient"), \
+             patch("tradesync.brokers.ibkr_follower_endpoint."
+                   "IbkrFollowerEndpoint") as MockFollower, \
+             patch("tradesync.event_replicator.EventReplicator"), \
+             patch("tradesync.proxy.ibkr_event_source_observer."
+                   "IbkrEventSourceObserver") as MockObs:
+            MockFollower.return_value.connect.side_effect = RuntimeError(
+                "gateway down")
+            # Must not raise despite connect() blowing up.
+            result = main._build_neutral_ibkr_source(
+                self._cfg(), MagicMock(), MagicMock(), MagicMock(), log)
+            self.assertIs(result, MockObs.return_value)
 
     def test_tradovate_follower_keeps_resolver(self):
         rep = self._pair("tradovate", ratio=1.0)

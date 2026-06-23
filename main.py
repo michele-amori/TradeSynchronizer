@@ -314,6 +314,24 @@ def _build_neutral_ibkr_source(cfg, tradovate, resolver, order_map, log):
             "places orders on a SECOND real account — validate on paper "
             "first.",
             pair.follower.account_id, gw.host, gw.port, gw.client_id, ratio)
+        # Connect the follower's Gateway NOW. Unlike the Tradovate
+        # follower (which wraps the already-connected `tradovate` client)
+        # and the Tradovate→IBKR WS pipeline (which connects in
+        # SourcePipeline.start), nothing else connects this second IBKR
+        # account — so without this the first mirrored order fails with
+        # "resolve_contract called while disconnected" and the follower
+        # receives nothing. Guarded: a Gateway that's down must NOT crash
+        # engine startup; we log a clear, actionable error and leave the
+        # follower disconnected (orders fail until the Gateway is up and
+        # the engine restarted) rather than abort the whole addon.
+        try:
+            follower.connect()
+        except Exception as e:  # noqa: BLE001 - startup must not be blocked
+            log.error(
+                "IBKR→IBKR follower Gateway %s:%d (account %s) is not "
+                "reachable (%s) — mirrored orders will FAIL until the "
+                "Gateway is logged in and the engine is restarted.",
+                gw.host, gw.port, pair.follower.account_id, e)
     else:
         # IBKR→Tradovate: the live hot path. Runs on the broker-neutral
         # EventReplicator (the only engine now that the historical
