@@ -239,6 +239,52 @@ class TestOcoCascade(unittest.TestCase):
         self.assertEqual(self.follower.cancelled, ["5001"])  # ONLY the TP
         self.assertNotIn("OCO sibling", res.reason)
 
+    def test_native_oco_skips_exit_cancel_after_entry_filled(self):
+        # THE BUG FIX: source bracket opened (entry filled), then closed
+        # via the stop → the source cancels the take-profit sibling. On a
+        # native-OCO follower we must NOT replicate that cancel: IBKR
+        # ocaGroups the two exit legs, so cancelling the TP cancels the SL
+        # too, killing the follower's protection before its own bracket
+        # closes the position — stranding the follower open (observed
+        # live: source flat, follower long +1). The replicator stays out.
+        self._setup(native_oco=True)
+        # entry fills → position open
+        self.er.apply(OrderEvent(
+            kind=EventKind.FILL, source_broker="tradovate",
+            source_account_id="50000001", source_order_id="s-200"))
+        # source closed via stop → it cancels the TP sibling
+        res = self.er.apply(OrderEvent(
+            kind=EventKind.CANCEL, source_broker="tradovate",
+            source_account_id="50000001", source_order_id="s-tp"))
+        self.assertTrue(res.skipped, res.reason)
+        self.assertEqual(self.follower.cancelled, [])  # TP left alive
+        self.assertIn("native-OCO", res.reason)
+
+    def test_native_oco_skips_stop_cancel_after_entry_filled(self):
+        # Same, symmetric: source closed via take-profit → cancels the
+        # stop sibling. Must also be skipped on a native-OCO follower.
+        self._setup(native_oco=True)
+        self.er.apply(OrderEvent(
+            kind=EventKind.FILL, source_broker="tradovate",
+            source_account_id="50000001", source_order_id="s-200"))
+        res = self.er.apply(OrderEvent(
+            kind=EventKind.CANCEL, source_broker="tradovate",
+            source_account_id="50000001", source_order_id="s-sl"))
+        self.assertTrue(res.skipped, res.reason)
+        self.assertEqual(self.follower.cancelled, [])
+
+    def test_native_oco_still_replicates_exit_cancel_when_never_filled(self):
+        # Guard: if the entry NEVER filled (a still-pending bracket), an
+        # exit-leg cancel is a genuine teardown and MUST still be
+        # replicated (one cancel tears down the whole IBKR bracket). The
+        # skip only applies once the position has opened.
+        self._setup(native_oco=True)
+        res = self.er.apply(OrderEvent(
+            kind=EventKind.CANCEL, source_broker="tradovate",
+            source_account_id="50000001", source_order_id="s-tp"))
+        self.assertTrue(res.success, res.reason)
+        self.assertEqual(self.follower.cancelled, ["5001"])
+
     def test_cancel_single_order_does_not_cascade(self):
         # A non-bracket order (no #LMT/#STP label) must never cascade.
         self._setup(native_oco=False)

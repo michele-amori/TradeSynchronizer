@@ -78,6 +78,8 @@ _ROLE_TOKEN = {
 }
 # Inverse, for cascade sibling lookup.
 _SIBLING_TOKEN = {"LMT": "STP", "STP": "LMT"}
+# Cap on the bounded set of opened-bracket bases (see __init__).
+_OPENED_MAX = 256
 
 
 def scale_quantity(master_qty: int, ratio: float) -> int:
@@ -146,6 +148,16 @@ class EventReplicator:
         # Follower size scaling: follower_qty = round(master_qty * ratio),
         # min 1. 1.0 = exact mirror. See scale_quantity().
         self._ratio = ratio
+        # Bracket entry-label bases whose ENTRY has filled (position is,
+        # or was, open). Used to recognise an OCO-driven exit-leg CANCEL
+        # (the source closed via one exit, so it cancels the sibling) and
+        # NOT replicate it to a native-OCO follower: on IBKR the two exit
+        # legs share an ocaGroup, so cancelling one cancels BOTH, which
+        # would destroy the follower's still-live protective leg before
+        # its own native bracket can close the position — stranding the
+        # follower open and unhedged. Insertion-ordered dict used as a
+        # bounded set (oldest evicted past _OPENED_MAX).
+        self._opened_bracket_bases: dict = {}
 
     # ── size scaling ─────────────────────────────────────────────── #
     #
@@ -298,6 +310,28 @@ class EventReplicator:
                 success=False, skipped=True,
                 reason=f"no follower order known for source id {sid} — "
                        f"nothing to cancel")
+        # OCO-driven exit cancel on a native-OCO follower: DO NOT replicate.
+        # When the source bracket closes via one exit leg, it cancels the
+        # sibling exit. On a native-OCO follower (IBKR) the two exit legs
+        # share an ocaGroup, so cancelling one cancels BOTH — that would
+        # kill the follower's still-live protective leg before its own
+        # native bracket closes the position, stranding the follower open
+        # and unhedged (observed live: source flat, follower long +1).
+        # The follower's native bracket already resolves the exit and the
+        # sibling cancel, so we skip here. Gated on the bracket having
+        # OPENED (entry filled): a cancel of an exit leg on a bracket that
+        # never filled is a genuine teardown of a pending bracket and MUST
+        # still be replicated (one cancel tears down the whole IBKR
+        # bracket, which is correct there).
+        if getattr(self._follower, "native_oco", False) and label \
+                and "#" in label \
+                and label.rpartition("#")[0] in self._opened_bracket_bases:
+            self._order_map.remove_by_source_id(sid)
+            return EventResult(
+                success=True, skipped=True,
+                reason=f"native-OCO follower: skipped OCO-driven exit "
+                       f"cancel of {label} — the follower's own bracket "
+                       f"closes the position and cancels the sibling")
         try:
             self._follower.cancel_order(follower_id)
         except Exception as e:  # noqa: BLE001
@@ -358,6 +392,16 @@ class EventReplicator:
         """
         sid = event.source_order_id
         label = self._order_map.source_label_for_source_id(sid)
+        # An ENTRY (or single) fill OPENS the position. Remember its label
+        # base so a later exit-leg CANCEL on this bracket is recognised as
+        # OCO-driven (position closing) and not replicated to a native-OCO
+        # follower — see _apply_cancel. Exit-leg fills (label carries #)
+        # don't open anything; they're handled by the cascade below.
+        if label and "#" not in label:
+            self._opened_bracket_bases[label] = True
+            while len(self._opened_bracket_bases) > _OPENED_MAX:
+                self._opened_bracket_bases.pop(
+                    next(iter(self._opened_bracket_bases)))
         cascaded = self._cascade_oco_sibling(label)
         if cascaded:
             return EventResult(
